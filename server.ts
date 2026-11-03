@@ -1,4 +1,5 @@
 import express from "express";
+import nodemailer from "nodemailer";
 import { DatabaseSync } from "node:sqlite";
 import {
   randomBytes,
@@ -101,25 +102,47 @@ const auth = (req: any, res: any, next: any) => {
   next();
 };
 app.get("/api/auth/me", auth, (req: any, res) => res.json(req.user));
+const mailer = process.env.SMTP_HOST
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: process.env.SMTP_USER
+        ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+        : undefined,
+    })
+  : null;
 app.post("/api/auth/forgot", (req, res) => {
-  const u = one(
-    "SELECT id FROM users WHERE email=?",
-    String(req.body?.email || "")
-      .toLowerCase()
-      .trim(),
-  );
-  let devLink;
+  const email = String(req.body?.email || "")
+    .toLowerCase()
+    .trim();
+  const u = one("SELECT id FROM users WHERE email=?", email);
   if (u) {
     const t = randomBytes(32).toString("hex");
     run("INSERT INTO resets VALUES(?,?,?)", sha(t), u.id, now() + 36e5);
     const link = `${process.env.APP_URL || "http://localhost:3000"}/#/reset?token=${t}`;
-    console.log("[recuperação de acesso] enviar ao usuário:", link); // TODO: integrar SMTP (ver README)
-    if (!PROD) devLink = link;
+    if (mailer)
+      mailer
+        .sendMail({
+          from: process.env.SMTP_FROM || process.env.SMTP_USER,
+          to: email,
+          subject: "Recuperação de acesso — Harmonize",
+          text: `Para criar uma nova senha, acesse (válido por 1 hora):\n${link}`,
+        })
+        .catch((e: any) =>
+          console.error("Falha ao enviar e-mail de recuperação:", e.message),
+        );
+    else if (process.env.DEV_LOG_RESET_LINKS === "true" && !PROD)
+      console.log("[DEV] link de recuperação:", link);
+    else
+      console.warn(
+        "SMTP não configurado: e-mail de recuperação NÃO foi enviado.",
+      );
   }
   res.json({
     ok: true,
-    message: "Se o e-mail estiver cadastrado, enviaremos as instruções.",
-    devLink,
+    message:
+      "Se o e-mail estiver cadastrado, você receberá as instruções de recuperação.",
   });
 });
 app.post("/api/auth/reset", (req, res) => {
@@ -132,6 +155,40 @@ app.post("/api/auth/reset", (req, res) => {
   run("UPDATE users SET hash=? WHERE id=?", hashPw(password), r.user_id);
   run("DELETE FROM resets WHERE user_id=?", r.user_id);
   run("DELETE FROM sessions WHERE user_id=?", r.user_id);
+  res.json({ ok: true });
+});
+app.use("/api/account", auth);
+app.put("/api/account", (req: any, res) => {
+  const name = String(req.body?.name || "").trim(),
+    email = String(req.body?.email || "")
+      .toLowerCase()
+      .trim(),
+    f: any = {};
+  if (!name) f.name = "Informe o nome.";
+  if (!/^\S+@\S+\.\S+$/.test(email)) f.email = "E-mail inválido.";
+  if (Object.keys(f).length) return fail(res, 422, "Dados inválidos.", f);
+  if (one("SELECT id FROM users WHERE email=? AND id<>?", email, req.user.id))
+    return fail(res, 409, "Este e-mail já está em uso.", {
+      email: "Este e-mail já está em uso.",
+    });
+  run("UPDATE users SET name=?,email=? WHERE id=?", name, email, req.user.id);
+  res.json({ id: req.user.id, name, email });
+});
+app.put("/api/account/password", (req: any, res) => {
+  const { current = "", password = "", confirm = "" } = req.body || {},
+    u = one("SELECT * FROM users WHERE id=?", req.user.id);
+  if (!checkPw(String(current), u.hash))
+    return fail(res, 403, "Senha atual incorreta.");
+  if (String(password).length < 8)
+    return fail(res, 422, "A nova senha deve ter ao menos 8 caracteres.");
+  if (password !== confirm)
+    return fail(res, 422, "A confirmação não confere com a nova senha.");
+  run("UPDATE users SET hash=? WHERE id=?", hashPw(password), u.id);
+  run(
+    "DELETE FROM sessions WHERE user_id=? AND token<>?",
+    u.id,
+    sha(cookie(req, "sid")),
+  );
   res.json({ ok: true });
 });
 app.use("/api/clients", auth);
@@ -323,6 +380,19 @@ app.delete("/api/events/:id", (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/overview", auth, (_q, res) => {
+  const d = new Date(),
+    today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  res.json({
+    events: one("SELECT COUNT(*) n FROM events").n,
+    clients: one("SELECT COUNT(*) n FROM clients").n,
+    byStatus: all("SELECT status,COUNT(*) n FROM events GROUP BY status"),
+    upcoming: all(
+      `${EQ} WHERE e.date>=? AND e.status NOT IN ('cancelado','rascunho') ORDER BY e.date,e.start_time LIMIT 5`,
+      today,
+    ),
+  });
+});
 app.use("/api", (_q, res) => fail(res, 404, "Rota não encontrada."));
 app.use(express.static("public"));
 app.use((e: any, _q: any, res: any, _n: any) => {

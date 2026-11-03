@@ -73,13 +73,14 @@ const V = { mode: "month", cur: new Date(), q: "", status: "" },
 const O = { V, E, C };
 
 const NAV = [
+    ["overview", "Visão Geral"],
     ["agenda", "Agenda"],
     ["events", "Eventos"],
     ["clients", "Clientes"],
   ],
   SOON = ["Financeiro", "Equipe", "Repertório", "Relatórios"];
 const shell = (page, title, body, actions = "") => {
-  app.innerHTML = `<aside class="side"><div class="logo">Harmonize</div><nav>${NAV.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}">${l}</a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante">${l}<small>em breve</small></span>`).join("")}</nav><div class="me"><span>${e(me.name || me.email)}</span><button data-act="logout" class="link">Sair</button></div></aside><main><header class="top"><h1>${title}</h1><div>${actions}</div></header>${body}</main>`;
+  app.innerHTML = `<aside class="side"><div class="logo">Harmonize</div><nav>${NAV.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}">${l}</a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante">${l}<small>em breve</small></span>`).join("")}</nav><div class="me"><a class="link" href="#/account">${e(me.name || me.email)}</a><button data-act="logout" class="link">Sair</button></div></aside><main><header class="top"><h1>${title}</h1><div>${actions}</div></header>${body}</main>`;
 };
 const authCard = (inner) => {
   app.innerHTML = `<div class="auth"><div class="card"><div class="logo dark">Harmonize</div>${inner}</div></div>`;
@@ -87,7 +88,7 @@ const authCard = (inner) => {
 
 // ---------- Roteador ----------
 async function route() {
-  const [p, qs] = (location.hash.slice(2) || "agenda").split("?"),
+  const [p, qs] = (location.hash.slice(2) || "overview").split("?"),
     q = new URLSearchParams(qs || ""),
     s = p.split("/");
   try {
@@ -100,14 +101,16 @@ async function route() {
       ? resetView(q.get("token"))
       : loginView(s[0] == "forgot");
   if (["login", "forgot", "reset"].includes(s[0]))
-    return (location.hash = "#/agenda");
+    return (location.hash = "#/overview");
   const f =
     {
+      overview: overviewView,
+      account: accountView,
       agenda: agendaView,
       events: eventsView,
       clients: clientsView,
       event: () => eventRoute(s, q),
-    }[s[0]] || agendaView;
+    }[s[0]] || overviewView;
   try {
     await f();
   } catch (x) {
@@ -131,6 +134,26 @@ const resetView = (t) =>
   authCard(
     `<h2>Nova senha</h2><form data-form="reset"><input type="hidden" name="token" value="${e(t)}">${field("Nova senha (mín. 8 caracteres)", "password", "", "password", "required minlength=8")}<div id="msg" class="errtxt"></div><button class="btn">Redefinir</button></form>`,
   );
+
+// ---------- Visão geral e conta ----------
+async function overviewView() {
+  const o = await api("GET", "/overview"),
+    box = (l, n) =>
+      `<div class="card"><p class="note">${l}</p><h2>${n}</h2></div>`;
+  shell(
+    "overview",
+    "Visão Geral",
+    `<div class="cards">${box("Eventos", o.events)}${box("Clientes", o.clients)}${o.byStatus.map((x) => box(ST[x.status] || x.status, x.n)).join("")}</div><h2 style="margin:24px 0 12px">Próximos eventos</h2><div class="list">${o.upcoming.map((x) => evRow(x)).join("") || '<p class="note">Nenhum evento futuro. <a href="#/event/new">Criar evento</a></p>'}</div>`,
+    '<a class="btn" href="#/event/new">+ Novo evento</a>',
+  );
+}
+function accountView() {
+  shell(
+    "account",
+    "Minha conta",
+    `<div class="row" style="align-items:start"><form class="card" data-form="profile"><h3>Dados de acesso</h3>${field("Nome", "name", me.name)}${field("E-mail", "email", me.email, "email")}<button class="btn">Salvar</button></form><form class="card" data-form="password"><h3>Alterar senha</h3>${field("Senha atual", "current", "", "password", 'autocomplete="current-password"')}${field("Nova senha (mín. 8 caracteres)", "password", "", "password", 'minlength=8 autocomplete="new-password"')}${field("Confirmar nova senha", "confirm", "", "password", 'autocomplete="new-password"')}<button class="btn">Alterar senha</button></form></div>`,
+  );
+}
 
 // ---------- Agenda ----------
 async function agendaView() {
@@ -388,12 +411,34 @@ const A = {
   },
 };
 const FORMS = {
+  profile: async (f) => {
+    try {
+      await api("PUT", "/account", Object.fromEntries(new FormData(f)));
+      toast("Dados atualizados.");
+      route();
+    } catch (x) {
+      toast(errMsg(x), 1);
+    }
+  },
+  password: async (f) => {
+    try {
+      await api(
+        "PUT",
+        "/account/password",
+        Object.fromEntries(new FormData(f)),
+      );
+      toast("Senha alterada.");
+      f.reset();
+    } catch (x) {
+      toast(errMsg(x), 1);
+    }
+  },
   login: async (f) => {
     const d = Object.fromEntries(new FormData(f));
     d.remember = !!d.remember;
     try {
       await api("POST", "/auth/login", d);
-      location.hash = "#/agenda";
+      location.hash = "#/overview";
       route();
     } catch (x) {
       $("#msg").textContent = errMsg(x);
@@ -405,11 +450,7 @@ const FORMS = {
       "/auth/forgot",
       Object.fromEntries(new FormData(f)),
     );
-    $("#msg").innerHTML =
-      e(r.message) +
-      (r.devLink
-        ? `<br><a href="${e(r.devLink)}">Link (apenas em desenvolvimento)</a>`
-        : "");
+    $("#msg").textContent = r.message;
   },
   reset: async (f) => {
     try {

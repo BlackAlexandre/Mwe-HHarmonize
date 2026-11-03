@@ -2,16 +2,19 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 const P = 3917,
   B = `http://localhost:${P}`,
   DB = "/tmp/h-test.db";
 let srv: any,
-  ck = "";
+  ck = "",
+  logs = "";
 const call = async (m: string, u: string, b?: any, c = ck) => {
   const r = await fetch(B + u, {
     method: m,
     headers: { "content-type": "application/json", cookie: c },
-    body: b ? JSON.stringify(b) : undefined,
+    body: b && m !== "GET" ? JSON.stringify(b) : undefined,
   });
   const s = r.headers.get("set-cookie");
   if (s && u.includes("login")) ck = s.split(";")[0];
@@ -26,9 +29,11 @@ before(async () => {
       DB_FILE: DB,
       ADMIN_EMAIL: "a@t.com",
       ADMIN_PASSWORD: "senha-forte-1",
+      DEV_LOG_RESET_LINKS: "true",
     },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "ignore"],
   });
+  srv.stdout.on("data", (d: any) => (logs += d));
   for (let i = 0; i < 50; i++) {
     try {
       await fetch(B + "/api/auth/me");
@@ -41,7 +46,13 @@ before(async () => {
 after(() => srv.kill());
 
 test("rotas privadas exigem login", async () => {
-  for (const u of ["/api/events", "/api/clients", "/api/auth/me"])
+  for (const u of [
+    "/api/events",
+    "/api/clients",
+    "/api/auth/me",
+    "/api/account",
+    "/api/overview",
+  ])
     assert.equal((await call("GET", u, undefined, "")).s, 401);
 });
 test('login inválido e válido (sessão e "permanecer conectado")', async () => {
@@ -147,7 +158,44 @@ test("integridade: cliente com evento não pode ser excluído", async () => {
 });
 test("recuperação de acesso e logout", async () => {
   const f = await call("POST", "/api/auth/forgot", { email: "a@t.com" }, "");
-  const token = new URL(f.j.devLink).hash.split("token=")[1];
+  assert.equal(f.j.devLink, undefined, "token nunca vai na resposta da API");
+  assert.deepEqual(
+    (await call("POST", "/api/auth/forgot", { email: "ninguem@t.com" }, "")).j,
+    f.j,
+    "resposta igual para e-mail inexistente",
+  );
+  await new Promise((r) => setTimeout(r, 300));
+  const token = /token=([0-9a-f]+)/.exec(logs)![1];
+  const raw = new DatabaseSync(DB),
+    sha = (t: string) => createHash("sha256").update(t).digest("hex");
+  raw
+    .prepare("INSERT INTO resets VALUES(?,?,?)")
+    .run(sha("expirado"), 1, Date.now() - 1000);
+  assert.equal(
+    (
+      await call(
+        "POST",
+        "/api/auth/reset",
+        { token: "expirado", password: "qualquer-senha-1" },
+        "",
+      )
+    ).s,
+    400,
+    "token expirado",
+  );
+  assert.equal(
+    (
+      await call(
+        "POST",
+        "/api/auth/reset",
+        { token: "inexistente", password: "qualquer-senha-1" },
+        "",
+      )
+    ).s,
+    400,
+    "token inválido",
+  );
+  raw.close();
   assert.equal(
     (await call("POST", "/api/auth/reset", { token, password: "curta" }, "")).s,
     400,
@@ -199,4 +247,105 @@ test("recuperação de acesso e logout", async () => {
   );
   await call("POST", "/api/auth/logout");
   assert.equal((await call("GET", "/api/auth/me")).s, 401);
+});
+
+test("minha conta: dados, e-mail duplicado e senha", async () => {
+  await call("POST", "/api/auth/login", {
+    email: "a@t.com",
+    password: "nova-senha-2",
+  });
+  const raw = new DatabaseSync(DB);
+  raw
+    .prepare("INSERT INTO users(email,name,hash) VALUES(?,?,?)")
+    .run("b@t.com", "B", "x:00");
+  raw.close();
+  assert.equal(
+    (await call("PUT", "/api/account", { name: "", email: "x" })).s,
+    422,
+  );
+  assert.equal(
+    (await call("PUT", "/api/account", { name: "Outro", email: "b@t.com" })).s,
+    409,
+  );
+  assert.equal(
+    (
+      await call("PUT", "/api/account", {
+        name: "Novo Nome",
+        email: "NOVO@t.com",
+      })
+    ).j.email,
+    "novo@t.com",
+  );
+  const pw = (b: any) => call("PUT", "/api/account/password", b);
+  assert.equal(
+    (
+      await pw({
+        current: "errada",
+        password: "outra-senha-9",
+        confirm: "outra-senha-9",
+      })
+    ).s,
+    403,
+  );
+  assert.equal(
+    (await pw({ current: "nova-senha-2", password: "curta", confirm: "curta" }))
+      .s,
+    422,
+  );
+  assert.equal(
+    (
+      await pw({
+        current: "nova-senha-2",
+        password: "outra-senha-9",
+        confirm: "diferente",
+      })
+    ).s,
+    422,
+  );
+  assert.equal(
+    (
+      await pw({
+        current: "nova-senha-2",
+        password: "outra-senha-9",
+        confirm: "outra-senha-9",
+      })
+    ).s,
+    200,
+  );
+  assert.equal(
+    (await call("GET", "/api/auth/me")).s,
+    200,
+    "sessão atual continua válida",
+  );
+  assert.equal(
+    (
+      await call("POST", "/api/auth/login", {
+        email: "novo@t.com",
+        password: "outra-senha-9",
+      })
+    ).s,
+    200,
+  );
+});
+test("erros: ids inexistentes, cliente inexistente, JSON inválido e visão geral", async () => {
+  for (const [m, u] of [
+    ["GET", "/api/events/99999"],
+    ["PUT", "/api/events/99999"],
+    ["PUT", "/api/clients/99999"],
+    ["GET", "/api/rota-inexistente"],
+  ])
+    assert.equal((await call(m, u, { name: "X" })).s, 404, u);
+  assert.equal(
+    (await call("POST", "/api/events", { name: "X", client_id: 99999 })).s,
+    422,
+  );
+  const r = await fetch(B + "/api/clients", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: ck },
+    body: "{ruim",
+  });
+  assert.equal(r.status, 400);
+  const o = await call("GET", "/api/overview");
+  assert.equal(o.s, 200);
+  assert.ok(Array.isArray(o.j.upcoming) && Array.isArray(o.j.byStatus));
 });
