@@ -349,3 +349,79 @@ test("erros: ids inexistentes, cliente inexistente, JSON inválido e visão gera
   assert.equal(o.s, 200);
   assert.ok(Array.isArray(o.j.upcoming) && Array.isArray(o.j.byStatus));
 });
+
+test("evento completo: operacional, repertório por momento, status e vínculo", async () => {
+  const c = await call("POST", "/api/clients", {
+    name: "Cliente Op",
+    phone: "11999",
+  });
+  const base = {
+    name: "Gala",
+    type: "Corporativo",
+    date: "2026-12-10",
+    start_time: "18:00",
+    end_time: "22:00",
+    client_id: c.j.id,
+    venue: "Hotel",
+    city: "SP",
+    uf: "sp",
+    attire: "Social",
+    crew_arrival: "15:30",
+    venue_contact: "Maria",
+    critical_notes: "Ruído após 22h",
+    contract_value: 12500.5,
+    status: "preparacao",
+    repertoire: [
+      { moment: "entrada", title: "Canon in D", performer: "Quarteto" },
+      { moment: "saida", title: "Marcha Nupcial" },
+    ],
+  };
+  const r = await call("POST", "/api/events", base);
+  assert.equal(r.s, 201);
+  assert.equal(r.j.status, "preparacao");
+  assert.equal(r.j.repertoire.length, 2);
+  assert.equal(r.j.attire, "Social");
+  assert.equal(r.j.contract_value, 12500.5);
+  assert.equal(r.j.end_time, "22:00");
+  assert.equal(
+    (
+      await call("POST", "/api/events", {
+        ...base,
+        repertoire: [{ moment: "x", title: "A" }],
+      })
+    ).s,
+    422,
+  );
+  assert.equal(
+    (await call("POST", "/api/events", { ...base, end_time: "25:00" })).s,
+    422,
+  );
+  assert.equal(
+    (await call("POST", "/api/events", { ...base, contract_value: -5 })).s,
+    422,
+  );
+  const u = await call("PUT", "/api/events/" + r.j.id, {
+    ...r.j,
+    repertoire: [{ moment: "coquetel", title: "Fly Me to the Moon" }],
+  });
+  assert.deepEqual(
+    u.j.repertoire.map((x: any) => x.title),
+    ["Fly Me to the Moon"],
+  );
+  assert.equal(
+    (await call("GET", "/api/events/" + r.j.id)).j.repertoire.length,
+    1,
+  );
+  const cl = (await call("GET", "/api/clients?sort=recent")).j.find(
+    (x: any) => x.id == c.j.id,
+  );
+  assert.equal(cl.ev_status, "preparacao");
+  assert.equal((await call("DELETE", "/api/events/" + r.j.id)).s, 200);
+  const raw = new DatabaseSync(DB);
+  assert.equal(
+    (raw.prepare("SELECT COUNT(*) n FROM repertoire").get() as any).n,
+    0,
+    "repertório removido em cascata",
+  );
+  raw.close();
+});
