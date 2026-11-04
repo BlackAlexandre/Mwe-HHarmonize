@@ -32,6 +32,20 @@ const all = (sql: string, ...a: any[]): any[] =>
 const one = (sql: string, ...a: any[]): any => db.prepare(sql).get(...a);
 const run = (sql: string, ...a: any[]) => db.prepare(sql).run(...a);
 
+// Migração segura e aditiva: só acrescenta colunas/tabelas que ainda não existem.
+const evCols = all("PRAGMA table_info(events)").map((c) => c.name);
+for (const [c, t] of [
+  ["end_time", "TEXT"],
+  ["attire", "TEXT"],
+  ["crew_arrival", "TEXT"],
+  ["venue_contact", "TEXT"],
+  ["critical_notes", "TEXT"],
+  ["contract_value", "REAL"],
+])
+  if (!evCols.includes(c)) db.exec(`ALTER TABLE events ADD COLUMN ${c} ${t}`);
+db.exec(`CREATE TABLE IF NOT EXISTS repertoire(id INTEGER PRIMARY KEY,event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,moment TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,title TEXT NOT NULL,performer TEXT,notes TEXT);
+CREATE INDEX IF NOT EXISTS rep_event ON repertoire(event_id);`);
+
 if (
   !one("SELECT id FROM users") &&
   process.env.ADMIN_EMAIL &&
@@ -219,7 +233,7 @@ app.get("/api/clients", (req, res) => {
       ] || "c.name";
   res.json(
     all(
-      `SELECT c.*,(SELECT COUNT(*) FROM events e WHERE e.client_id=c.id) n FROM clients c WHERE c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? ORDER BY ${sort}`,
+      `SELECT c.*,(SELECT COUNT(*) FROM events e WHERE e.client_id=c.id) n, (SELECT type FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_type, (SELECT status FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_status, (SELECT date FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_date, (SELECT venue FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_venue FROM clients c WHERE c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? ORDER BY ${sort}`,
       q,
       q,
       q,
@@ -278,8 +292,22 @@ const EF = [
   "lineup",
   "notes",
   "status",
+  "end_time",
+  "attire",
+  "crew_arrival",
+  "venue_contact",
+  "critical_notes",
+  "contract_value",
 ];
-const STATUS = ["rascunho", "pendente", "confirmado", "concluido", "cancelado"];
+const STATUS = [
+  "rascunho",
+  "pendente",
+  "preparacao",
+  "confirmado",
+  "concluido",
+  "cancelado",
+];
+const MOMENTS = ["entrada", "assinaturas", "saida", "coquetel", "outro"];
 const evalid = (b: any) => {
   const f: any = {},
     st = b?.status || "rascunho";
@@ -299,7 +327,52 @@ const evalid = (b: any) => {
       ["venue", "Informe o local."],
     ])
       if (!b?.[k]) f[k] = f[k] || m;
+  if (b?.end_time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.end_time))
+    f.end_time = "Horário final inválido.";
+  if (
+    b?.contract_value != null &&
+    b.contract_value !== "" &&
+    !(Number(b.contract_value) >= 0)
+  )
+    f.contract_value = "Valor inválido.";
+  if (
+    b?.repertoire !== undefined &&
+    (!Array.isArray(b.repertoire) ||
+      b.repertoire.some(
+        (r: any) => !r?.title?.trim() || !MOMENTS.includes(r.moment),
+      ))
+  )
+    f.repertoire = "Repertório inválido: informe momento e música.";
   return f;
+};
+const withRep = (x: any) => ({
+  ...x,
+  repertoire: all(
+    "SELECT moment,title,performer,notes FROM repertoire WHERE event_id=? ORDER BY position,id",
+    x.id,
+  ),
+});
+const saveRep = (id: number, rep: any) => {
+  if (!Array.isArray(rep)) return;
+  db.exec("BEGIN");
+  try {
+    run("DELETE FROM repertoire WHERE event_id=?", id);
+    rep.forEach((r: any, i: number) =>
+      run(
+        "INSERT INTO repertoire(event_id,moment,position,title,performer,notes) VALUES(?,?,?,?,?,?)",
+        id,
+        r.moment,
+        i,
+        r.title.trim(),
+        r.performer?.trim() || null,
+        r.notes?.trim() || null,
+      ),
+    );
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 };
 const EQ =
   "SELECT e.*,c.name client_name FROM events e LEFT JOIN clients c ON c.id=e.client_id";
@@ -340,7 +413,7 @@ app.get("/api/events", (req, res) => {
 });
 app.get("/api/events/:id", (req, res) => {
   const x = one(`${EQ} WHERE e.id=?`, req.params.id);
-  x ? res.json(x) : fail(res, 404, "Evento não encontrado.");
+  x ? res.json(withRep(x)) : fail(res, 404, "Evento não encontrado.");
 });
 app.post("/api/events", (req, res) => {
   const f = evalid(req.body);
@@ -349,7 +422,9 @@ app.post("/api/events", (req, res) => {
     `INSERT INTO events(${EF.join(",")}) VALUES(${EF.map(() => "?").join(",")})`,
     ...vals(req.body),
   );
-  res.status(201).json(one(`${EQ} WHERE e.id=?`, Number(r.lastInsertRowid)));
+  const id = Number(r.lastInsertRowid);
+  saveRep(id, req.body.repertoire);
+  res.status(201).json(withRep(one(`${EQ} WHERE e.id=?`, id)));
 });
 app.put("/api/events/:id", (req, res) => {
   if (!one("SELECT id FROM events WHERE id=?", req.params.id))
@@ -361,7 +436,8 @@ app.put("/api/events/:id", (req, res) => {
     ...vals(req.body),
     req.params.id,
   );
-  res.json(one(`${EQ} WHERE e.id=?`, req.params.id));
+  saveRep(Number(req.params.id), req.body.repertoire);
+  res.json(withRep(one(`${EQ} WHERE e.id=?`, req.params.id)));
 });
 app.patch("/api/events/:id/status", (req, res) => {
   const x = one("SELECT * FROM events WHERE id=?", req.params.id);

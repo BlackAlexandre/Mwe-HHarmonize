@@ -10,7 +10,8 @@ const e = (s) =>
   );
 const ST = {
   rascunho: "Rascunho",
-  pendente: "Pendente",
+  pendente: "Proposta",
+  preparacao: "Em preparação",
   confirmado: "Confirmado",
   concluido: "Concluído",
   cancelado: "Cancelado",
@@ -69,7 +70,7 @@ const statusOpts = [["", "Todos os status"], ...Object.entries(ST)];
 let me = null;
 const V = { mode: "month", cur: new Date(), q: "", status: "" },
   E = { q: "", status: "", from: "", to: "" },
-  C = { q: "", sort: "name" };
+  C = { q: "", sort: "recent" };
 const O = { V, E, C };
 
 const NAV = [
@@ -80,10 +81,21 @@ const NAV = [
   ],
   SOON = ["Financeiro", "Equipe", "Repertório", "Relatórios"];
 const shell = (page, title, body, actions = "") => {
-  app.innerHTML = `<aside class="side"><div class="logo">Harmonize</div><nav>${NAV.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}">${l}</a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante">${l}<small>em breve</small></span>`).join("")}</nav><div class="me"><a class="link" href="#/account">${e(me.name || me.email)}</a><button data-act="logout" class="link">Sair</button></div></aside><main><header class="top"><h1>${title}</h1><div>${actions}</div></header>${body}</main>`;
+  app.innerHTML = `<aside class="side"><div class="logo">MWE Harmonize<small>Gestão de Eventos Musicais</small></div><nav>${NAV.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}">${l}</a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante">${l}<small>em breve</small></span>`).join("")}</nav><a class="btn rose" href="#/event/new">Novo evento</a><div class="me"><a class="link" href="#/account">${e(me.name || me.email)}</a><button data-act="logout" class="link">Sair</button></div></aside><main><header class="top"><h1>${title}</h1><div>${actions}</div></header>${body}</main><nav class="tabbar" aria-label="Navegação principal">${[
+    ["overview", "Início"],
+    ["agenda", "Agenda"],
+    ["events", "Eventos"],
+    ["clients", "Clientes"],
+  ]
+    .map(
+      ([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}">${l}</a>`,
+    )
+    .join("")}<a href="#/account">Conta</a></nav>`;
 };
-const authCard = (inner) => {
-  app.innerHTML = `<div class="auth"><div class="card"><div class="logo dark">Harmonize</div>${inner}</div></div>`;
+const authCard = (inner, split) => {
+  app.innerHTML = split
+    ? `<div class="login"><section class="brand"><div><div class="logo">MWE Harmonize</div><p>Gestão de Eventos Musicais</p></div><div><blockquote>“Cada evento merece uma experiência musical inesquecível.”</blockquote><p>Centralize agenda, clientes, repertório, equipe e financeiro em um só lugar.</p><ul><li>Agenda integrada</li><li>Clientes e propostas</li><li>Financeiro e relatórios</li></ul></div><small>MWE Harmonize · Feito para equipes musicais</small></section><section class="pane"><div class="card">${inner}</div></section></div>`
+    : `<div class="auth"><div class="card"><div class="logo dark">Harmonize</div>${inner}</div></div>`;
 };
 
 // ---------- Roteador ----------
@@ -124,10 +136,11 @@ route();
 function loginView(forgot) {
   if (forgot)
     return authCard(
-      `<h2>Recuperar acesso</h2><p>Informe seu e-mail para receber o link de redefinição.</p><form data-form="forgot">${field("E-mail", "email", "", "email", "required")}<button class="btn">Enviar link</button></form><p id="msg" class="note"></p><a href="#/login">Voltar ao login</a>`,
+      `<h2>Recuperar acesso</h2><p>Informe seu e-mail para receber o link de redefinição.</p><form data-form="forgot">${field("E-mail", "email", "", "email", "required")}<button class="btn">Enviar link</button></form><p id="msg" class="note" role="status"></p><a href="#/login">Voltar ao login</a>`,
     );
   authCard(
-    `<h2>Bem-vindo de volta</h2><form data-form="login">${field("E-mail", "email", "", "email", 'required autocomplete="username"')}${field("Senha", "password", "", "password", 'required autocomplete="current-password"')}<label class="chk"><input type="checkbox" name="remember"> Permanecer conectado</label><div id="msg" class="errtxt"></div><button class="btn">Entrar</button></form><p><a href="#/forgot">Esqueci minha senha</a></p>`,
+    `<small class="eyebrow">ACESSO SEGURO</small><h2>Bem-vindo de volta</h2><p class="note">Entre com seus dados para acessar a MWE Harmonize.</p><form data-form="login">${field("E-mail", "email", "", "email", 'required autocomplete="username" placeholder="nome@empresa.com"')}<label>Senha<span class="pw"><input name="password" type="password" required autocomplete="current-password" placeholder="••••••••"><button type="button" class="eye" data-act="showpw" aria-label="Mostrar senha">◉</button></span></label><div class="between"><label class="chk"><input type="checkbox" name="remember"> Manter conectado</label><a href="#/forgot"><b>Esqueci minha senha</b></a></div><div id="msg" class="errtxt" role="alert"></div><button class="btn wide">Entrar</button></form><p><b>Primeiro acesso?</b><br><span class="note">Solicite suas credenciais ao administrador responsável pela equipe.</span></p>`,
+    true,
   );
 }
 const resetView = (t) =>
@@ -175,8 +188,29 @@ async function agendaView() {
   if (V.status) qs.set("status", V.status);
   const ev = await api("GET", "/events?" + qs),
     today = iso(new Date());
+  const tm = (s) => (s ? +s.slice(0, 2) * 60 + +s.slice(3, 5) : null),
+    en = (x) => tm(x.end_time) ?? tm(x.start_time) + 60,
+    conf = new Set();
+  ev.forEach((p) =>
+    ev.forEach((q) => {
+      if (
+        p.id < q.id &&
+        p.date &&
+        p.date == q.date &&
+        p.start_time &&
+        q.start_time &&
+        p.status != "cancelado" &&
+        q.status != "cancelado" &&
+        tm(p.start_time) < en(q) &&
+        tm(q.start_time) < en(p)
+      ) {
+        conf.add(p.id);
+        conf.add(q.id);
+      }
+    }),
+  );
   const chip = (x) =>
-    `<button class="chip s-${x.status}" data-act="open" data-id="${x.id}" title="${e(x.name)}">${e(x.start_time || "")} ${e(x.name)}</button>`;
+    `<button class="chip s-${x.status}" data-act="open" data-id="${x.id}" title="${e(x.name)}${conf.has(x.id) ? " — conflito de horário" : ""}">${conf.has(x.id) ? "⚠ " : ""}${e(x.start_time || "")} ${e(x.name)}</button>`;
   const by = (d) => ev.filter((x) => x.date == d);
   let grid = "";
   const dn = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
@@ -231,7 +265,7 @@ async function agendaView() {
       ],
       mode,
       'data-o="V" data-k="mode" style="width:auto"',
-    )}<input data-o="V" data-k="q" placeholder="Buscar evento, cliente ou local" value="${e(V.q)}">${sel("", "status", statusOpts, V.status, 'data-o="V" data-k="status" style="width:auto"')}</div>${grid}`,
+    )}${V.q || V.status ? '<button class="btn ghost" data-act="clearf">Limpar filtros</button>' : ""}<input data-o="V" data-k="q" placeholder="Buscar evento, cliente ou local" value="${e(V.q)}">${sel("", "status", statusOpts, V.status, 'data-o="V" data-k="status" style="width:auto"')}</div>${grid}`,
     `<a class="btn" href="#/event/new">+ Novo evento</a>`,
   );
 }
@@ -249,6 +283,48 @@ async function eventsView() {
     `<a class="btn" href="#/event/new">+ Novo evento</a>`,
   );
 }
+const MOM = [
+  ["entrada", "Entrada"],
+  ["assinaturas", "Assinaturas"],
+  ["saida", "Saída"],
+  ["coquetel", "Coquetel"],
+  ["outro", "Outro"],
+];
+const money = (v) =>
+  Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const ini = (n) =>
+  String(n)
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase();
+const KEYS = [
+  "name",
+  "type",
+  "date",
+  "start_time",
+  "end_time",
+  "client_id",
+  "contact",
+  "venue",
+  "city",
+  "lineup",
+  "attire",
+  "crew_arrival",
+  "venue_contact",
+  "contract_value",
+];
+const pct = (d) =>
+  Math.round(
+    ((KEYS.filter((k) => d[k] !== null && d[k] !== undefined && d[k] !== "")
+      .length +
+      (d.repertoire?.some((r) => r.title?.trim()) ? 1 : 0)) /
+      (KEYS.length + 1)) *
+      100,
+  );
+let W = null;
 async function eventRoute(s, q) {
   if (s[1] == "new") {
     W = {
@@ -258,6 +334,7 @@ async function eventRoute(s, q) {
         date: q.get("date") || "",
         start_time: q.get("time") || "",
         status: "rascunho",
+        repertoire: [],
       },
     };
     return wizard();
@@ -271,54 +348,125 @@ async function eventRoute(s, q) {
     W = { id: x.id, step: 1, d: x };
     return wizard();
   }
-  const row = (l, v) => `<dt>${l}</dt><dd>${e(v || "—")}</dd>`;
+  detail(x);
+}
+function detail(x) {
+  const t = (l, v) =>
+    `<div><small class="lbl">${l}</small><p>${e(v || "—")}</p></div>`;
+  const hr = x.start_time
+    ? x.start_time + (x.end_time ? " - " + x.end_time : "")
+    : "—";
+  const reps = MOM.map(([k, l]) => [
+    l,
+    x.repertoire.filter((r) => r.moment == k),
+  ]).filter((g) => g[1].length);
+  const place = [x.venue, x.city, x.uf].filter(Boolean).join(", ");
   shell(
     "events",
-    e(x.name),
-    `<div class="card"><dl>${row("Tipo", x.type)}${row("Data", fmt(x.date))}${row("Horário", x.start_time)}${row("Cliente", x.client_name)}${row("Contato", x.contact)}${row("Local", x.venue)}${row("Cidade/UF", [x.city, x.uf].filter(Boolean).join(" / "))}${row("Formação musical", x.lineup)}${row("Observações", x.notes)}<dt>Status</dt><dd>${sel(
+    "Detalhes do evento",
+    `<a href="#/agenda" class="back">← Voltar para a agenda</a>
+<div class="card hero"><div class="hero-top"><div><h2>${e(x.name)}</h2><p class="note">${e(x.type || "Tipo não informado")}</p></div>${badge(x.status)}</div><div class="three">${t("Data", fmt(x.date))}${t("Horário", hr)}${t("Local", [x.venue, x.city].filter(Boolean).join(", "))}</div></div>
+<div class="cols"><div>
+<div class="card"><h3>Operacional</h3><div class="two">${t("Formação", x.lineup)}${t("Traje", x.attire)}${t("Chegada da equipe", x.crew_arrival)}${t("Contato no local", x.venue_contact)}${t("Cliente", x.client_name)}${t("Contato principal", x.contact)}</div></div>
+<div class="card"><h3>Repertório aprovado</h3>${reps.length ? reps.map(([l, rs]) => rs.map((r, i) => `<div class="rep"><b>${i ? "" : l}</b><div><p>${e(r.title)}</p><small>${e([r.performer, r.notes].filter(Boolean).join(" · "))}</small></div></div>`).join("")).join("") : '<p class="note">Nenhuma música cadastrada.</p>'}</div>
+</div><div>
+<div class="card"><h3>Observações críticas</h3><p>${e(x.critical_notes || "Nenhuma observação crítica.")}</p>${x.notes ? `<p class="note">${e(x.notes)}</p>` : ""}</div>
+<div class="card"><h3>Localização</h3><p>${e(place || "Local não informado")}</p>${x.venue ? `<a class="btn ghost" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}">Abrir no mapa</a>` : ""}</div>
+<div class="card"><h3>Status</h3>${sel(
       "",
       "st",
       Object.entries(ST).filter(
         (k) => k[0] != "rascunho" || x.status == "rascunho",
       ),
       x.status,
-      `data-chg="status" data-id="${x.id}" style="width:auto"`,
-    )}</dd></dl></div>`,
-    `<a class="btn ghost" href="#/agenda">Agenda</a> <a class="btn" href="#/event/${x.id}/edit">Editar</a> <button class="btn danger" data-act="delevent" data-id="${x.id}">Excluir</button>`,
+      `data-chg="status" data-id="${x.id}" aria-label="Status do evento"`,
+    )}${x.contract_value != null ? `<p class="note">Valor do contrato: ${money(x.contract_value)}</p>` : ""}</div>
+</div></div>`,
+    `<a class="btn" href="#/event/${x.id}/edit">Editar</a> <button class="btn danger" data-act="delevent" data-id="${x.id}">Excluir</button>`,
   );
 }
-let W = null;
 async function wizard() {
   const d = W.d,
-    cl = await api("GET", "/clients"),
-    n = W.step;
+    n = W.step,
+    cl = await api("GET", "/clients");
+  d.repertoire ||= [];
+  const sec = (t, b) => `<section class="card sec"><h3>${t}</h3>${b}</section>`;
+  const names = [
+    "Dados gerais",
+    "Cliente e local",
+    "Música e equipe",
+    "Financeiro",
+  ];
   const cn = cl.find((c) => c.id == d.client_id)?.name;
   const body = [
-    `${field("Nome do evento *", "name", d.name)}${sel("Tipo", "type", [["", "Selecione"], ...TIPOS.map((t) => [t, t])], d.type)}<div class="row">${field("Data *", "date", d.date, "date")}${field("Horário inicial *", "start_time", d.start_time, "time")}</div>`,
-    `${sel("Cliente *", "client_id", [["", "Selecione"], ...cl.map((c) => [c.id, c.name])], d.client_id)}<p class="note"><a href="#/clients">Cadastrar novo cliente</a> (salve o rascunho antes)</p>${field("Contato no evento", "contact", d.contact)}${field("Local *", "venue", d.venue)}<div class="row">${field("Cidade", "city", d.city)}${field("UF", "uf", d.uf, "text", "maxlength=2")}</div>`,
-    `<label>Formação musical<textarea name="lineup" rows="3" placeholder="Ex.: Voz, violão e teclado">${e(d.lineup)}</textarea></label><p class="note">A seleção de equipe e repertório fica nos módulos de outros integrantes (em breve).</p>`,
-    `<label>Observações<textarea name="notes" rows="4">${e(d.notes)}</textarea></label>${
-      W.id && d.status != "rascunho"
-        ? sel(
-            "Status",
-            "status",
-            Object.entries(ST).filter((k) => k[0] != "rascunho"),
-            d.status,
-          )
-        : ""
-    }<div class="review"><h3>Revisão</h3><p><b>${e(d.name)}</b> ${d.type ? "· " + e(d.type) : ""}</p><p>${fmt(d.date)} às ${e(d.start_time || "—")}</p><p>Cliente: ${e(cn || "—")} ${d.contact ? "· " + e(d.contact) : ""}</p><p>Local: ${e(d.venue || "—")} ${e([d.city, d.uf].filter(Boolean).join("/"))}</p><p>Formação: ${e(d.lineup || "—")}</p></div>`,
+    sec(
+      "Informações do evento",
+      `${field("Nome do evento *", "name", d.name, "text", 'placeholder="Digite o nome do evento"')}<div class="row">${sel("Tipo de evento", "type", [["", "Selecione o tipo"], ...TIPOS.map((t) => [t, t])], d.type)}${field("Data *", "date", d.date, "date")}</div><div class="row">${field("Horário de início *", "start_time", d.start_time, "time")}${field("Horário final", "end_time", d.end_time, "time")}</div>`,
+    ),
+    sec(
+      "Cliente e contato",
+      `${sel("Cliente *", "client_id", [["", "Selecionar cliente"], ...cl.map((c) => [c.id, c.name])], d.client_id)}<p class="note"><a href="#/clients">Cadastrar novo cliente</a> (salve o rascunho antes)</p>${field("Contato principal", "contact", d.contact, "text", 'placeholder="Telefone ou e-mail"')}`,
+    ) +
+      sec(
+        "Local e observações",
+        `${field("Local *", "venue", d.venue, "text", 'placeholder="Nome do local"')}<div class="row">${field("Cidade", "city", d.city)}${field("UF", "uf", d.uf, "text", "maxlength=2")}</div><label>Observações<textarea name="notes" rows="3">${e(d.notes)}</textarea></label><label>Observações críticas<textarea name="critical_notes" rows="3" placeholder="Restrições de ruído, acesso, montagem...">${e(d.critical_notes)}</textarea></label>`,
+      ),
+    sec(
+      "Música e equipe",
+      `${field("Formação musical", "lineup", d.lineup, "text", 'placeholder="Ex.: Quarteto de cordas e harpa"')}<div class="row">${field("Traje", "attire", d.attire)}${field("Chegada da equipe", "crew_arrival", d.crew_arrival, "text", 'placeholder="Ex.: 14:30 (passagem de som)"')}</div>${field("Contato responsável no local", "venue_contact", d.venue_contact)}`,
+    ) +
+      sec(
+        "Repertório por momento",
+        `${d.repertoire.map((r, i) => `<div class="reprow"><select data-r="moment" aria-label="Momento">${MOM.map(([k, l]) => `<option value="${k}" ${r.moment == k ? "selected" : ""}>${l}</option>`).join("")}</select><input data-r="title" aria-label="Música" placeholder="Música" value="${e(r.title)}"><input data-r="performer" aria-label="Formação" placeholder="Formação" value="${e(r.performer)}"><input data-r="notes" aria-label="Observações" placeholder="Observações" value="${e(r.notes)}"><button type="button" class="btn ghost" data-act="delrep" data-i="${i}" aria-label="Remover música">✕</button></div>`).join("")}<button type="button" class="btn ghost" data-act="addrep">+ Adicionar música</button>`,
+      ),
+    sec(
+      "Financeiro",
+      `${field("Valor do contrato (R$)", "contract_value", d.contract_value, "number", 'min=0 step="0.01"')}<p class="note">Parcelas e recebimentos pertencem ao módulo Financeiro (em breve); aqui é salvo apenas o valor do contrato.</p>`,
+    ) +
+      sec(
+        "Revisão",
+        `<p><b>${e(d.name || "—")}</b> ${d.type ? "· " + e(d.type) : ""}</p><p>${fmt(d.date)} · ${e(d.start_time || "—")}${d.end_time ? " – " + e(d.end_time) : ""}</p><p>Cliente: ${e(cn || "—")} · Local: ${e(d.venue || "—")}</p><p>Formação: ${e(d.lineup || "—")} · ${d.repertoire.filter((r) => r.title?.trim()).length} música(s)</p>${
+          W.id && d.status != "rascunho"
+            ? sel(
+                "Status",
+                "status",
+                Object.entries(ST).filter((k) => k[0] != "rascunho"),
+                d.status,
+              )
+            : ""
+        }`,
+      ),
   ][n - 1];
+  const p = pct(d);
   shell(
     "events",
-    W.id ? "Editar evento" : "Novo evento",
-    `<div class="steps">${["Dados gerais", "Cliente e local", "Música e equipe", "Complementares"].map((t, i) => `<span class="${i + 1 == n ? "on" : ""}">${i + 1}. ${t}</span>`).join("")}</div><form class="card" data-form="wizard" style="max-width:640px">${body}<div class="acts">${n > 1 ? '<button type="button" class="btn ghost" data-act="prev">Voltar</button>' : ""}${!W.id || d.status == "rascunho" ? '<button type="button" class="btn ghost" data-act="draft">Salvar rascunho</button>' : ""}<button class="btn">${n < 4 ? "Próximo" : "Salvar evento"}</button></div></form>`,
+    W.id ? "Editar evento" : "Cadastrar novo evento",
+    `<div class="steps">${names.map((t, i) => `<span class="${i + 1 == n ? "on" : ""} ${i + 1 < n ? "done" : ""}"><i>${i + 1}</i>${t}</span>`).join("")}</div><div class="cols wz"><form data-form="wizard">${body}<div class="acts"><a class="btn ghost" href="#/events">Cancelar</a><span style="flex:1"></span>${n > 1 ? '<button type="button" class="btn ghost" data-act="prev">Voltar</button>' : ""}${!W.id || d.status == "rascunho" ? '<button type="button" class="btn rose" data-act="draft">Salvar rascunho</button>' : ""}<button class="btn">${n < 4 ? "Continuar" : "Salvar evento"}</button></div></form><aside><div class="card"><div class="between"><h3>Progresso do cadastro</h3><b>${p}%</b></div><div class="bar2"><i style="width:${p}%"></i></div><p class="note">Etapa ${n} de 4 • ${names[n - 1]}</p></div><div class="card"><h3>Etapas do cadastro</h3>${names.map((t, i) => `<p class="stp ${i + 1 == n ? "on" : ""}"><i>${i + 1}</i><span><b>${t}</b><br><small>${i + 1 < n ? "Concluída" : i + 1 == n ? "Em preenchimento" : "Pendente"}</small></span></p>`).join("")}</div><div class="card dark"><small>ANTES DE CONTINUAR</small><h3>Revise os dados principais</h3><p>As informações poderão ser revisadas antes da confirmação final do evento.</p></div></aside></div>`,
+    badge(d.status || "rascunho"),
   );
 }
 const readForm = (f) => {
   Object.assign(W.d, Object.fromEntries(new FormData(f)));
+  if (W.step == 3)
+    W.d.repertoire = [...f.querySelectorAll(".reprow")].map((r) =>
+      Object.fromEntries(
+        [...r.querySelectorAll("[data-r]")].map((i) => [i.dataset.r, i.value]),
+      ),
+    );
 };
 async function saveEvent(status) {
-  const body = { ...W.d, status };
+  const d = W.d,
+    btns = document.querySelectorAll("form[data-form=wizard] button");
+  btns.forEach((b) => (b.disabled = true));
+  const body = {
+    ...d,
+    status,
+    repertoire: (d.repertoire || []).filter((r) => r.title?.trim()),
+    contract_value:
+      d.contract_value === "" || d.contract_value == null
+        ? null
+        : Number(String(d.contract_value).replace(",", ".")),
+  };
   try {
     const x = W.id
       ? await api("PUT", "/events/" + W.id, body)
@@ -327,6 +475,7 @@ async function saveEvent(status) {
     location.hash = "#/event/" + x.id;
   } catch (x) {
     toast(errMsg(x), 1);
+    btns.forEach((b) => (b.disabled = false));
   }
 }
 
@@ -349,13 +498,36 @@ async function clientsView() {
       ],
       C.sort,
       'data-o="C" data-k="sort" style="width:auto"',
-    )}</div><div class="cards">${cl.map((c) => `<div class="card"><h3>${e(c.name)}</h3><p class="note">${e(c.email || "Sem e-mail")}<br>${e(c.phone || "Sem telefone")}<br>${c.n} evento(s)</p>${c.notes ? `<p>${e(c.notes)}</p>` : ""}<div class="acts"><button class="btn ghost" data-act="editclient" data-c='${e(JSON.stringify(c))}'>Editar</button><button class="btn danger" data-act="delclient" data-id="${c.id}">Excluir</button></div></div>`).join("") || '<p class="note">Nenhum cliente encontrado.</p>'}</div><dialog id="dlg"></dialog>`,
+    )}</div><div class="cards">${cl.map((c) => `<div class="card"><div class="chead"><span class="av">${ini(c.name)}</span><div><h3>${e(c.name)}</h3><small>${e(c.ev_type || "Sem evento")}</small></div>${c.ev_status ? badge(c.ev_status) : ""}</div><p class="note">${e(c.email || "Sem e-mail")}<br>${e(c.phone || "Sem telefone")}<br>${c.ev_date ? fmt(c.ev_date) + " · " + e(c.ev_venue || "Local a definir") + "<br>" : ""}${c.n} evento(s)</p>${c.notes ? `<p>${e(c.notes)}</p>` : ""}<div class="acts"><button class="btn ghost" data-act="editclient" data-c='${e(JSON.stringify(c))}'>Editar</button><button class="btn danger" data-act="delclient" data-id="${c.id}">Excluir</button></div></div>`).join("") || '<p class="note">Nenhum cliente encontrado.</p>'}</div><dialog id="dlg"></dialog>`,
     `<button class="btn" data-act="editclient" data-c="{}">+ Novo cliente</button>`,
   );
 }
 
 // ---------- Eventos de UI ----------
 const A = {
+  addrep: (t) => {
+    readForm(t.closest("form"));
+    W.d.repertoire.push({ moment: "entrada", title: "" });
+    wizard();
+  },
+  delrep: (t) => {
+    readForm(t.closest("form"));
+    W.d.repertoire.splice(+t.dataset.i, 1);
+    wizard();
+  },
+  clearf: () => {
+    V.q = "";
+    V.status = "";
+    route();
+  },
+  showpw: (t) => {
+    const i = t.previousElementSibling;
+    i.type = i.type == "password" ? "text" : "password";
+    t.setAttribute(
+      "aria-label",
+      i.type == "password" ? "Mostrar senha" : "Ocultar senha",
+    );
+  },
   logout: async () => {
     await api("POST", "/auth/logout");
     location.hash = "#/login";

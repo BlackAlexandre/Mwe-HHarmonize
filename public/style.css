@@ -423,3 +423,301 @@ dialog {
     margin-left: auto;
   }
 }
+
+/* ---- Figma: login, wizard, detalhes, clientes ---- */
+.logo small {
+  display: block;
+  font:
+    12px "DM Sans",
+    sans-serif;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+.btn.rose {
+  background: var(--rose);
+  color: var(--wine);
+}
+.btn.wide {
+  width: 100%;
+}
+.side .btn {
+  text-align: center;
+}
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.login {
+  display: grid;
+  grid-template-columns: minmax(300px, 38%) 1fr;
+  width: 100%;
+  min-height: 100vh;
+}
+.brand {
+  background: var(--wine);
+  color: var(--cream);
+  padding: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 24px;
+}
+.brand .logo {
+  color: var(--rose);
+  font-size: 32px;
+}
+.brand blockquote {
+  font:
+    italic 34px/1.25 "Playfair Display",
+    serif;
+  margin: 0 0 16px;
+}
+.brand ul {
+  padding-left: 18px;
+  line-height: 2;
+}
+.pane {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.pane .card {
+  width: 100%;
+  max-width: 460px;
+  padding: 36px;
+}
+.pw {
+  position: relative;
+  display: block;
+}
+.eye {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: 0;
+  color: var(--wine);
+  cursor: pointer;
+  font-size: 18px;
+}
+.btn.wide {
+  display: block;
+}
+.between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+.cols {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 18px;
+  align-items: start;
+}
+.cols > div,
+.cols > form,
+.cols > aside {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.cols .card h3 {
+  margin-bottom: 12px;
+}
+.back {
+  display: inline-block;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.hero {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.hero-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.hero h2 {
+  font-size: 30px;
+}
+.three {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 24px;
+}
+.lbl {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+.two p,
+.three p {
+  margin: 2px 0 0;
+}
+.rep {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.rep p {
+  margin: 0;
+}
+.reprow {
+  display: grid;
+  grid-template-columns: 120px 1.4fr 1fr 1fr auto;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.steps span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.steps i {
+  font-style: normal;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--line);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+}
+.steps .on i,
+.steps .done i {
+  background: var(--wine);
+  color: var(--cream);
+}
+.bar2 {
+  height: 8px;
+  background: #fff;
+  border-radius: 99px;
+  overflow: hidden;
+  margin: 10px 0;
+}
+.bar2 i {
+  display: block;
+  height: 100%;
+  background: var(--wine);
+}
+.stp {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 10px 0;
+}
+.stp i {
+  font-style: normal;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--cream);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+}
+.stp.on i {
+  background: var(--rose);
+}
+.card.dark {
+  background: var(--wine);
+  color: var(--cream);
+}
+.acts {
+  align-items: center;
+}
+.chead {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+.chead > div {
+  flex: 1;
+}
+.av {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--cream);
+  display: grid;
+  place-items: center;
+  font-family: "Playfair Display", serif;
+}
+.s-preparacao {
+  background: var(--rose);
+}
+.tabbar {
+  display: none;
+}
+:focus-visible {
+  outline: 3px solid #8a1c2b;
+  outline-offset: 2px;
+}
+@media (max-width: 800px) {
+  .login {
+    grid-template-columns: 1fr;
+  }
+  .brand {
+    padding: 24px;
+  }
+  .brand blockquote {
+    font-size: 24px;
+  }
+  .cols {
+    grid-template-columns: 1fr;
+  }
+  .three,
+  .two {
+    grid-template-columns: 1fr;
+  }
+  .reprow {
+    grid-template-columns: 1fr 1fr;
+  }
+  .side nav {
+    display: none;
+  }
+  .tabbar {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--card);
+    border-top: 1px solid var(--line);
+    justify-content: space-around;
+    padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+    z-index: 5;
+  }
+  .tabbar a {
+    text-decoration: none;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 10px;
+  }
+  .tabbar a.on {
+    background: var(--rose);
+  }
+  main {
+    padding-bottom: 80px;
+  }
+}
