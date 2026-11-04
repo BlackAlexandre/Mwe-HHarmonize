@@ -721,3 +721,35 @@ dialog {
     padding-bottom: 80px;
   }
 }
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+}
+.tbl th {
+  background: #efe4dc;
+  font-size: 12px;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 10px;
+}
+.tbl td {
+  padding: 12px 10px;
+  border-top: 1px solid var(--line);
+  vertical-align: top;
+}
+.nw {
+  white-space: nowrap;
+}
+.dayh {
+  margin: 12px 0 0;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+.stat h2 {
+  font-size: 36px;
+  margin: 4px 0;
+}
+.stat small {
+  letter-spacing: 0.06em;
+}

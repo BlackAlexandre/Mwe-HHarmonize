@@ -233,7 +233,7 @@ app.get("/api/clients", (req, res) => {
       ] || "c.name";
   res.json(
     all(
-      `SELECT c.*,(SELECT COUNT(*) FROM events e WHERE e.client_id=c.id) n, (SELECT type FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_type, (SELECT status FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_status, (SELECT date FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_date, (SELECT venue FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_venue FROM clients c WHERE c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? ORDER BY ${sort}`,
+      `SELECT c.*,(SELECT COUNT(*) FROM events e WHERE e.client_id=c.id) n, (SELECT type FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_type, (SELECT status FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_status, (SELECT date FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_date, (SELECT venue FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_venue FROM clients c WHERE (c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?) ${(req.query as any).status === "sem" ? "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.client_id=c.id)" : STATUS.includes((req.query as any).status) ? "AND EXISTS (SELECT 1 FROM events e WHERE e.client_id=c.id AND e.status='" + (req.query as any).status + "')" : ""} ORDER BY ${sort}`,
       q,
       q,
       q,
@@ -381,6 +381,30 @@ const vals = (b: any) =>
     { ...b, status: b.status || "rascunho", uf: b.uf?.toUpperCase?.() ?? b.uf },
     EF,
   );
+app.use("/api/events", (req: any, res, next) => {
+  const b = req.body;
+  if (
+    ["POST", "PUT"].includes(req.method) &&
+    b?.name &&
+    b?.date &&
+    (b.status || "rascunho") !== "rascunho" &&
+    !Object.keys(evalid(b)).length &&
+    one(
+      "SELECT id FROM events WHERE lower(name)=lower(?) AND date=? AND IFNULL(start_time,'')=? AND IFNULL(client_id,0)=? AND id<>?",
+      String(b.name).trim(),
+      b.date,
+      b.start_time || "",
+      Number(b.client_id) || 0,
+      Number(req.path.slice(1)) || 0,
+    )
+  )
+    return fail(
+      res,
+      409,
+      "Já existe um evento com o mesmo nome, data, horário e cliente.",
+    );
+  next();
+});
 app.get("/api/events", (req, res) => {
   const { q, status, from, to } = req.query as any,
     w: string[] = [],

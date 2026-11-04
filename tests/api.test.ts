@@ -2,11 +2,41 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
+import net from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 const P = 3917,
   B = `http://localhost:${P}`,
   DB = "/tmp/h-test.db";
+const mails: string[] = [];
+const smtp = net.createServer((s) => {
+  let buf = "",
+    data = "",
+    inData = false;
+  s.write("220 test ESMTP\r\n");
+  s.on("data", (c) => {
+    buf += c;
+    const lines = buf.split("\r\n");
+    buf = lines.pop()!;
+    for (const line of lines) {
+      if (inData) {
+        if (line == ".") {
+          inData = false;
+          mails.push(data);
+          data = "";
+          s.write("250 OK\r\n");
+        } else data += line + "\r\n";
+      } else if (/^DATA/i.test(line)) {
+        inData = true;
+        s.write("354 go\r\n");
+      } else if (/^QUIT/i.test(line)) {
+        s.write("221 bye\r\n");
+        s.end();
+      } else if (/^EHLO/i.test(line)) s.write("250-test\r\n250 8BITMIME\r\n");
+      else if (line) s.write("250 OK\r\n");
+    }
+  });
+});
 let srv: any,
   ck = "",
   logs = "";
@@ -22,6 +52,7 @@ const call = async (m: string, u: string, b?: any, c = ck) => {
 };
 before(async () => {
   rmSync(DB, { force: true });
+  await new Promise<void>((r) => smtp.listen(2599, r));
   srv = spawn(process.execPath, ["--import", "tsx", "server.ts"], {
     env: {
       ...process.env,
@@ -29,7 +60,9 @@ before(async () => {
       DB_FILE: DB,
       ADMIN_EMAIL: "a@t.com",
       ADMIN_PASSWORD: "senha-forte-1",
-      DEV_LOG_RESET_LINKS: "true",
+      SMTP_HOST: "127.0.0.1",
+      SMTP_PORT: "2599",
+      SMTP_FROM: "Harmonize <no-reply@test.local>",
     },
     stdio: ["ignore", "pipe", "ignore"],
   });
@@ -43,7 +76,10 @@ before(async () => {
     }
   }
 });
-after(() => srv.kill());
+after(() => {
+  srv.kill();
+  smtp.close();
+});
 
 test("rotas privadas exigem login", async () => {
   for (const u of [
@@ -164,8 +200,28 @@ test("recuperação de acesso e logout", async () => {
     f.j,
     "resposta igual para e-mail inexistente",
   );
-  await new Promise((r) => setTimeout(r, 300));
-  const token = /token=([0-9a-f]+)/.exec(logs)![1];
+  for (let i = 0; i < 30 && !mails.length; i++)
+    await new Promise((r) => setTimeout(r, 100));
+  assert.equal(
+    mails.length,
+    1,
+    "um e-mail enviado ao cadastrado e nenhum ao inexistente",
+  );
+  const [head, ...rest] = mails[0].split("\r\n\r\n"),
+    body = rest.join("\r\n\r\n"),
+    enc = /Content-Transfer-Encoding: (\S+)/i.exec(head)?.[1].toLowerCase();
+  const text =
+    enc == "base64"
+      ? Buffer.from(body.replace(/\s/g, ""), "base64").toString()
+      : enc == "quoted-printable"
+        ? body
+            .replace(/=\r\n/g, "")
+            .replace(/=([0-9A-F]{2})/g, (_, h) =>
+              String.fromCharCode(parseInt(h, 16)),
+            )
+        : body;
+  assert.match(head, /To: .*a@t\.com/i);
+  const token = /token=([0-9a-f]{64})/.exec(text)![1];
   const raw = new DatabaseSync(DB),
     sha = (t: string) => createHash("sha256").update(t).digest("hex");
   raw
@@ -424,4 +480,75 @@ test("evento completo: operacional, repertório por momento, status e vínculo",
     "repertório removido em cascata",
   );
   raw.close();
+});
+
+test("manter conectado: cookie persistente só quando marcado; logout encerra a sessão", async () => {
+  const a = await call("POST", "/api/auth/login", {
+    email: "novo@t.com",
+    password: "outra-senha-9",
+  });
+  assert.doesNotMatch(
+    a.h!,
+    /Max-Age=\d/,
+    "sem marcar: cookie de sessão do navegador",
+  );
+  const b = await call("POST", "/api/auth/login", {
+    email: "novo@t.com",
+    password: "outra-senha-9",
+    remember: true,
+  });
+  assert.match(b.h!, /Max-Age=2592000/);
+  assert.match(b.h!, /HttpOnly/);
+  const c = b.h!.split(";")[0];
+  assert.equal((await call("GET", "/api/auth/me", undefined, c)).s, 200);
+  await call("POST", "/api/auth/logout", undefined, c);
+  assert.equal((await call("GET", "/api/auth/me", undefined, c)).s, 401);
+});
+test("duplicidade, filtros de período e filtro de clientes por status", async () => {
+  await call("POST", "/api/auth/login", {
+    email: "novo@t.com",
+    password: "outra-senha-9",
+  });
+  const c = await call("POST", "/api/clients", { name: "Cliente Filtro" });
+  const ev = {
+    name: "Show Filtro",
+    date: "2027-03-10",
+    start_time: "20:00",
+    client_id: c.j.id,
+    venue: "Teatro",
+    status: "pendente",
+  };
+  const a = await call("POST", "/api/events", ev);
+  assert.equal(a.s, 201);
+  assert.equal(
+    (await call("POST", "/api/events", ev)).s,
+    409,
+    "duplicado bloqueado",
+  );
+  assert.equal(
+    (await call("POST", "/api/events", { ...ev, start_time: "21:00" })).s,
+    201,
+    "outro horário é permitido",
+  );
+  assert.equal(
+    (await call("PUT", "/api/events/" + a.j.id, { ...a.j })).s,
+    200,
+    "editar o próprio evento não conflita",
+  );
+  assert.equal(
+    (await call("GET", "/api/events?from=2027-03-01&to=2027-03-31&q=Filtro")).j
+      .length,
+    2,
+  );
+  assert.equal(
+    (await call("GET", "/api/events?from=2027-04-01&q=Filtro")).j.length,
+    0,
+  );
+  const has = async (st: string) =>
+    (await call("GET", "/api/clients?status=" + st)).j.some(
+      (x: any) => x.id == c.j.id,
+    );
+  assert.equal(await has("pendente"), true);
+  assert.equal(await has("confirmado"), false);
+  assert.equal(await has("sem"), false);
 });
