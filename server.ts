@@ -1,4 +1,5 @@
 import express from "express";
+import nodemailer from "nodemailer";
 import { DatabaseSync } from "node:sqlite";
 import {
   randomBytes,
@@ -30,6 +31,20 @@ const all = (sql: string, ...a: any[]): any[] =>
   db.prepare(sql).all(...a) as any[];
 const one = (sql: string, ...a: any[]): any => db.prepare(sql).get(...a);
 const run = (sql: string, ...a: any[]) => db.prepare(sql).run(...a);
+
+// Migração segura e aditiva: só acrescenta colunas/tabelas que ainda não existem.
+const evCols = all("PRAGMA table_info(events)").map((c) => c.name);
+for (const [c, t] of [
+  ["end_time", "TEXT"],
+  ["attire", "TEXT"],
+  ["crew_arrival", "TEXT"],
+  ["venue_contact", "TEXT"],
+  ["critical_notes", "TEXT"],
+  ["contract_value", "REAL"],
+])
+  if (!evCols.includes(c)) db.exec(`ALTER TABLE events ADD COLUMN ${c} ${t}`);
+db.exec(`CREATE TABLE IF NOT EXISTS repertoire(id INTEGER PRIMARY KEY,event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,moment TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,title TEXT NOT NULL,performer TEXT,notes TEXT);
+CREATE INDEX IF NOT EXISTS rep_event ON repertoire(event_id);`);
 
 if (
   !one("SELECT id FROM users") &&
@@ -101,25 +116,47 @@ const auth = (req: any, res: any, next: any) => {
   next();
 };
 app.get("/api/auth/me", auth, (req: any, res) => res.json(req.user));
+const mailer = process.env.SMTP_HOST
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: process.env.SMTP_USER
+        ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+        : undefined,
+    })
+  : null;
 app.post("/api/auth/forgot", (req, res) => {
-  const u = one(
-    "SELECT id FROM users WHERE email=?",
-    String(req.body?.email || "")
-      .toLowerCase()
-      .trim(),
-  );
-  let devLink;
+  const email = String(req.body?.email || "")
+    .toLowerCase()
+    .trim();
+  const u = one("SELECT id FROM users WHERE email=?", email);
   if (u) {
     const t = randomBytes(32).toString("hex");
     run("INSERT INTO resets VALUES(?,?,?)", sha(t), u.id, now() + 36e5);
     const link = `${process.env.APP_URL || "http://localhost:3000"}/#/reset?token=${t}`;
-    console.log("[recuperação de acesso] enviar ao usuário:", link); // TODO: integrar SMTP (ver README)
-    if (!PROD) devLink = link;
+    if (mailer)
+      mailer
+        .sendMail({
+          from: process.env.SMTP_FROM || process.env.SMTP_USER,
+          to: email,
+          subject: "Recuperação de acesso — Harmonize",
+          text: `Para criar uma nova senha, acesse (válido por 1 hora):\n${link}`,
+        })
+        .catch((e: any) =>
+          console.error("Falha ao enviar e-mail de recuperação:", e.message),
+        );
+    else if (process.env.DEV_LOG_RESET_LINKS === "true" && !PROD)
+      console.log("[DEV] link de recuperação:", link);
+    else
+      console.warn(
+        "SMTP não configurado: e-mail de recuperação NÃO foi enviado.",
+      );
   }
   res.json({
     ok: true,
-    message: "Se o e-mail estiver cadastrado, enviaremos as instruções.",
-    devLink,
+    message:
+      "Se o e-mail estiver cadastrado, você receberá as instruções de recuperação.",
   });
 });
 app.post("/api/auth/reset", (req, res) => {
@@ -132,6 +169,40 @@ app.post("/api/auth/reset", (req, res) => {
   run("UPDATE users SET hash=? WHERE id=?", hashPw(password), r.user_id);
   run("DELETE FROM resets WHERE user_id=?", r.user_id);
   run("DELETE FROM sessions WHERE user_id=?", r.user_id);
+  res.json({ ok: true });
+});
+app.use("/api/account", auth);
+app.put("/api/account", (req: any, res) => {
+  const name = String(req.body?.name || "").trim(),
+    email = String(req.body?.email || "")
+      .toLowerCase()
+      .trim(),
+    f: any = {};
+  if (!name) f.name = "Informe o nome.";
+  if (!/^\S+@\S+\.\S+$/.test(email)) f.email = "E-mail inválido.";
+  if (Object.keys(f).length) return fail(res, 422, "Dados inválidos.", f);
+  if (one("SELECT id FROM users WHERE email=? AND id<>?", email, req.user.id))
+    return fail(res, 409, "Este e-mail já está em uso.", {
+      email: "Este e-mail já está em uso.",
+    });
+  run("UPDATE users SET name=?,email=? WHERE id=?", name, email, req.user.id);
+  res.json({ id: req.user.id, name, email });
+});
+app.put("/api/account/password", (req: any, res) => {
+  const { current = "", password = "", confirm = "" } = req.body || {},
+    u = one("SELECT * FROM users WHERE id=?", req.user.id);
+  if (!checkPw(String(current), u.hash))
+    return fail(res, 403, "Senha atual incorreta.");
+  if (String(password).length < 8)
+    return fail(res, 422, "A nova senha deve ter ao menos 8 caracteres.");
+  if (password !== confirm)
+    return fail(res, 422, "A confirmação não confere com a nova senha.");
+  run("UPDATE users SET hash=? WHERE id=?", hashPw(password), u.id);
+  run(
+    "DELETE FROM sessions WHERE user_id=? AND token<>?",
+    u.id,
+    sha(cookie(req, "sid")),
+  );
   res.json({ ok: true });
 });
 app.use("/api/clients", auth);
@@ -162,7 +233,7 @@ app.get("/api/clients", (req, res) => {
       ] || "c.name";
   res.json(
     all(
-      `SELECT c.*,(SELECT COUNT(*) FROM events e WHERE e.client_id=c.id) n FROM clients c WHERE c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? ORDER BY ${sort}`,
+      `SELECT c.*,(SELECT COUNT(*) FROM events e WHERE e.client_id=c.id) n, (SELECT type FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_type, (SELECT status FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_status, (SELECT date FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_date, (SELECT venue FROM events e WHERE e.client_id=c.id ORDER BY e.date DESC LIMIT 1) ev_venue FROM clients c WHERE (c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?) ${(req.query as any).status === "sem" ? "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.client_id=c.id)" : STATUS.includes((req.query as any).status) ? "AND EXISTS (SELECT 1 FROM events e WHERE e.client_id=c.id AND e.status='" + (req.query as any).status + "')" : ""} ORDER BY ${sort}`,
       q,
       q,
       q,
@@ -221,8 +292,22 @@ const EF = [
   "lineup",
   "notes",
   "status",
+  "end_time",
+  "attire",
+  "crew_arrival",
+  "venue_contact",
+  "critical_notes",
+  "contract_value",
 ];
-const STATUS = ["rascunho", "pendente", "confirmado", "concluido", "cancelado"];
+const STATUS = [
+  "rascunho",
+  "pendente",
+  "preparacao",
+  "confirmado",
+  "concluido",
+  "cancelado",
+];
+const MOMENTS = ["entrada", "assinaturas", "saida", "coquetel", "outro"];
 const evalid = (b: any) => {
   const f: any = {},
     st = b?.status || "rascunho";
@@ -242,7 +327,52 @@ const evalid = (b: any) => {
       ["venue", "Informe o local."],
     ])
       if (!b?.[k]) f[k] = f[k] || m;
+  if (b?.end_time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(b.end_time))
+    f.end_time = "Horário final inválido.";
+  if (
+    b?.contract_value != null &&
+    b.contract_value !== "" &&
+    !(Number(b.contract_value) >= 0)
+  )
+    f.contract_value = "Valor inválido.";
+  if (
+    b?.repertoire !== undefined &&
+    (!Array.isArray(b.repertoire) ||
+      b.repertoire.some(
+        (r: any) => !r?.title?.trim() || !MOMENTS.includes(r.moment),
+      ))
+  )
+    f.repertoire = "Repertório inválido: informe momento e música.";
   return f;
+};
+const withRep = (x: any) => ({
+  ...x,
+  repertoire: all(
+    "SELECT moment,title,performer,notes FROM repertoire WHERE event_id=? ORDER BY position,id",
+    x.id,
+  ),
+});
+const saveRep = (id: number, rep: any) => {
+  if (!Array.isArray(rep)) return;
+  db.exec("BEGIN");
+  try {
+    run("DELETE FROM repertoire WHERE event_id=?", id);
+    rep.forEach((r: any, i: number) =>
+      run(
+        "INSERT INTO repertoire(event_id,moment,position,title,performer,notes) VALUES(?,?,?,?,?,?)",
+        id,
+        r.moment,
+        i,
+        r.title.trim(),
+        r.performer?.trim() || null,
+        r.notes?.trim() || null,
+      ),
+    );
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 };
 const EQ =
   "SELECT e.*,c.name client_name FROM events e LEFT JOIN clients c ON c.id=e.client_id";
@@ -251,6 +381,30 @@ const vals = (b: any) =>
     { ...b, status: b.status || "rascunho", uf: b.uf?.toUpperCase?.() ?? b.uf },
     EF,
   );
+app.use("/api/events", (req: any, res, next) => {
+  const b = req.body;
+  if (
+    ["POST", "PUT"].includes(req.method) &&
+    b?.name &&
+    b?.date &&
+    (b.status || "rascunho") !== "rascunho" &&
+    !Object.keys(evalid(b)).length &&
+    one(
+      "SELECT id FROM events WHERE lower(name)=lower(?) AND date=? AND IFNULL(start_time,'')=? AND IFNULL(client_id,0)=? AND id<>?",
+      String(b.name).trim(),
+      b.date,
+      b.start_time || "",
+      Number(b.client_id) || 0,
+      Number(req.path.slice(1)) || 0,
+    )
+  )
+    return fail(
+      res,
+      409,
+      "Já existe um evento com o mesmo nome, data, horário e cliente.",
+    );
+  next();
+});
 app.get("/api/events", (req, res) => {
   const { q, status, from, to } = req.query as any,
     w: string[] = [],
@@ -283,7 +437,7 @@ app.get("/api/events", (req, res) => {
 });
 app.get("/api/events/:id", (req, res) => {
   const x = one(`${EQ} WHERE e.id=?`, req.params.id);
-  x ? res.json(x) : fail(res, 404, "Evento não encontrado.");
+  x ? res.json(withRep(x)) : fail(res, 404, "Evento não encontrado.");
 });
 app.post("/api/events", (req, res) => {
   const f = evalid(req.body);
@@ -292,7 +446,9 @@ app.post("/api/events", (req, res) => {
     `INSERT INTO events(${EF.join(",")}) VALUES(${EF.map(() => "?").join(",")})`,
     ...vals(req.body),
   );
-  res.status(201).json(one(`${EQ} WHERE e.id=?`, Number(r.lastInsertRowid)));
+  const id = Number(r.lastInsertRowid);
+  saveRep(id, req.body.repertoire);
+  res.status(201).json(withRep(one(`${EQ} WHERE e.id=?`, id)));
 });
 app.put("/api/events/:id", (req, res) => {
   if (!one("SELECT id FROM events WHERE id=?", req.params.id))
@@ -304,7 +460,8 @@ app.put("/api/events/:id", (req, res) => {
     ...vals(req.body),
     req.params.id,
   );
-  res.json(one(`${EQ} WHERE e.id=?`, req.params.id));
+  saveRep(Number(req.params.id), req.body.repertoire);
+  res.json(withRep(one(`${EQ} WHERE e.id=?`, req.params.id)));
 });
 app.patch("/api/events/:id/status", (req, res) => {
   const x = one("SELECT * FROM events WHERE id=?", req.params.id);
@@ -323,6 +480,19 @@ app.delete("/api/events/:id", (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/overview", auth, (_q, res) => {
+  const d = new Date(),
+    today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  res.json({
+    events: one("SELECT COUNT(*) n FROM events").n,
+    clients: one("SELECT COUNT(*) n FROM clients").n,
+    byStatus: all("SELECT status,COUNT(*) n FROM events GROUP BY status"),
+    upcoming: all(
+      `${EQ} WHERE e.date>=? AND e.status NOT IN ('cancelado','rascunho') ORDER BY e.date,e.start_time LIMIT 5`,
+      today,
+    ),
+  });
+});
 app.use("/api", (_q, res) => fail(res, 404, "Rota não encontrada."));
 app.use(express.static("public"));
 app.use((e: any, _q: any, res: any, _n: any) => {
