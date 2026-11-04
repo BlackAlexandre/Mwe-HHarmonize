@@ -68,9 +68,16 @@ const sel = (l, n, o, v, x = "") =>
 const badge = (s) => `<span class="badge s-${s}">${ST[s] || s}</span>`;
 const statusOpts = [["", "Todos os status"], ...Object.entries(ST)];
 let me = null;
-const V = { mode: "month", cur: new Date(), q: "", status: "" },
+const V = {
+    from: "",
+    to: "",
+    mode: "month",
+    cur: new Date(),
+    q: "",
+    status: "",
+  },
   E = { q: "", status: "", from: "", to: "" },
-  C = { q: "", sort: "recent" };
+  C = { q: "", sort: "recent", status: "" };
 const O = { V, E, C };
 
 const NAV = [
@@ -170,7 +177,8 @@ function accountView() {
 
 // ---------- Agenda ----------
 async function agendaView() {
-  const { mode, cur } = V;
+  const { cur } = V,
+    mode = innerWidth <= 800 && V.mode == "month" ? "list" : V.mode;
   let a, b;
   const f1 = new Date(cur.getFullYear(), cur.getMonth(), 1);
   if (mode == "week") {
@@ -183,7 +191,10 @@ async function agendaView() {
     a = f1;
     b = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
   }
-  const qs = new URLSearchParams({ from: iso(a), to: iso(b) });
+  const qs = new URLSearchParams({
+    from: V.from && V.from > iso(a) ? V.from : iso(a),
+    to: V.to && V.to < iso(b) ? V.to : iso(b),
+  });
   if (V.q) qs.set("q", V.q);
   if (V.status) qs.set("status", V.status);
   const ev = await api("GET", "/events?" + qs),
@@ -248,7 +259,7 @@ async function agendaView() {
       .join("")}</div></div>`;
   } else {
     grid = ev.length
-      ? `<div class="list">${ev.map((x) => evRow(x)).join("")}</div>`
+      ? `<div class="list">${groupDays(ev)}</div>`
       : '<p class="note">Nenhum evento neste período.</p>';
   }
   const title = mode == "week" ? `${fmt(iso(a))} – ${fmt(iso(b))}` : mes(cur);
@@ -265,7 +276,7 @@ async function agendaView() {
       ],
       mode,
       'data-o="V" data-k="mode" style="width:auto"',
-    )}${V.q || V.status ? '<button class="btn ghost" data-act="clearf">Limpar filtros</button>' : ""}<input data-o="V" data-k="q" placeholder="Buscar evento, cliente ou local" value="${e(V.q)}">${sel("", "status", statusOpts, V.status, 'data-o="V" data-k="status" style="width:auto"')}</div>${grid}`,
+    )}${V.q || V.status || V.from || V.to ? '<button class="btn ghost" data-act="clearf">Limpar filtros</button>' : ""}<input type="date" data-o="V" data-k="from" value="${e(V.from)}" aria-label="Data inicial"><input type="date" data-o="V" data-k="to" value="${e(V.to)}" aria-label="Data final"><input data-o="V" data-k="q" placeholder="Buscar evento, cliente ou local" value="${e(V.q)}">${sel("", "status", statusOpts, V.status, 'data-o="V" data-k="status" style="width:auto"')}</div>${grid}`,
     `<a class="btn" href="#/event/new">+ Novo evento</a>`,
   );
 }
@@ -273,14 +284,48 @@ const evRow = (x) =>
   `<div class="card item" data-act="open" data-id="${x.id}"><div><h3>${e(x.name)}</h3><small>${e(x.client_name || "Sem cliente")} · ${fmt(x.date)} ${e(x.start_time || "")} · ${e(x.venue || "Local a definir")}${x.city ? ", " + e(x.city) : ""}${x.lineup ? " · " + e(x.lineup) : ""}</small></div>${badge(x.status)}</div>`;
 
 // ---------- Eventos ----------
+const DOW = [
+  "domingo",
+  "segunda-feira",
+  "terça-feira",
+  "quarta-feira",
+  "quinta-feira",
+  "sexta-feira",
+  "sábado",
+];
+const groupDays = (ev) => {
+  let last = "";
+  return ev
+    .map((x) => {
+      const h =
+        x.date != last
+          ? ((last = x.date),
+            `<h4 class="dayh">${x.date ? pd(x.date).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" }).toUpperCase() + " · " + DOW[pd(x.date).getDay()] + (x.date == iso(new Date()) ? " · Hoje" : "") : "SEM DATA"}</h4>`)
+          : "";
+      return h + evRow(x);
+    })
+    .join("");
+};
 async function eventsView() {
-  const qs = new URLSearchParams(Object.entries(E).filter(([, v]) => v)),
-    ev = await api("GET", "/events?" + qs);
+  const qs = new URLSearchParams(
+    Object.entries(E).filter(([k, v]) => v && k != "page"),
+  );
+  const [ev, o] = await Promise.all([
+    api("GET", "/events?" + qs),
+    api("GET", "/overview"),
+  ]);
+  const n = (s) => o.byStatus.find((x) => x.status == s)?.n || 0,
+    per = 8,
+    pages = Math.max(1, Math.ceil(ev.length / per)),
+    pg = Math.min(E.page || 1, pages),
+    rows = ev.slice((pg - 1) * per, pg * per);
+  const box = (l, v, s) =>
+    `<div class="card stat"><small>${l}</small><h2>${v}</h2><span class="note">${s}</span></div>`;
   shell(
     "events",
     "Eventos",
-    `<div class="bar"><input data-o="E" data-k="q" placeholder="Buscar evento, cliente ou local" value="${e(E.q)}">${sel("", "s", statusOpts, E.status, 'data-o="E" data-k="status" style="width:auto"')}<input type="date" data-o="E" data-k="from" value="${e(E.from)}" title="De"><input type="date" data-o="E" data-k="to" value="${e(E.to)}" title="Até"></div><div class="list">${ev.map((x) => evRow(x)).join("") || '<p class="note">Nenhum evento encontrado.</p>'}</div>`,
-    `<a class="btn" href="#/event/new">+ Novo evento</a>`,
+    `<div class="cards">${box("EVENTOS CONFIRMADOS", n("confirmado"), "no total")}${box("PROPOSTAS PENDENTES", n("pendente"), "aguardando retorno")}${box("EM PREPARAÇÃO", n("preparacao"), "em andamento")}</div><div class="bar" style="margin-top:16px"><input data-o="E" data-k="q" placeholder="Buscar por evento, cliente ou local..." value="${e(E.q)}">${sel("", "s", statusOpts, E.status, 'data-o="E" data-k="status" aria-label="Status"')}<input type="date" data-o="E" data-k="from" value="${e(E.from)}" aria-label="Data inicial"><input type="date" data-o="E" data-k="to" value="${e(E.to)}" aria-label="Data final">${E.q || E.status || E.from || E.to ? '<button class="btn ghost" data-act="cleare">Limpar filtros</button>' : ""}<a class="btn ghost" href="#/agenda">Calendário</a></div><div class="card"><div class="between"><h3>Lista de eventos</h3><span class="note">${ev.length} evento(s)</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Evento / cliente</th><th>Data</th><th>Local</th><th>Formação</th><th>Status</th><th>Ações</th></tr></thead><tbody>${rows.map((x) => `<tr><td><b>${e(x.name)}</b><br><small>${e(x.client_name || "Sem cliente")}</small></td><td>${fmt(x.date)}<br><small>${e(x.start_time || "")}</small></td><td>${e(x.venue || "—")}<br><small>${e(x.city || "")}</small></td><td>${e(x.lineup || "—")}</td><td>${badge(x.status)}</td><td class="nw"><a class="link" href="#/event/${x.id}">Ver</a> · <a class="link" href="#/event/${x.id}/edit">Editar</a> · <button class="link" data-act="delevent" data-id="${x.id}">Excluir</button></td></tr>`).join("") || '<tr><td colspan="6" class="note">Nenhum evento encontrado.</td></tr>'}</tbody></table></div><div class="between"><span class="note">Exibindo ${rows.length ? (pg - 1) * per + 1 : 0}–${(pg - 1) * per + rows.length} de ${ev.length}</span><div class="acts">${Array.from({ length: pages }, (_, i) => `<button class="btn ${i + 1 == pg ? "" : "ghost"}" data-act="page" data-p="${i + 1}" aria-label="Página ${i + 1}">${i + 1}</button>`).join("")}</div></div></div>`,
+    '<a class="btn" href="#/event/new">+ Novo evento</a>',
   );
 }
 const MOM = [
@@ -483,12 +528,12 @@ async function saveEvent(status) {
 async function clientsView() {
   const cl = await api(
     "GET",
-    `/clients?q=${encodeURIComponent(C.q)}&sort=${C.sort}`,
+    `/clients?q=${encodeURIComponent(C.q)}&sort=${C.sort}&status=${C.status || ""}`,
   );
   shell(
     "clients",
     "Clientes",
-    `<div class="bar"><input data-o="C" data-k="q" placeholder="Buscar por nome, e-mail ou telefone" value="${e(C.q)}">${sel(
+    `<div class="bar"><input data-o="C" data-k="q" placeholder="Buscar por nome, e-mail ou telefone" value="${e(C.q)}">${sel("", "f", [["", "Todos os clientes"], ["sem", "Sem eventos"], ...Object.entries(ST).filter((k) => k[0] != "rascunho")], C.status, 'data-o="C" data-k="status" aria-label="Filtrar clientes por status de evento"')}${sel(
       "",
       "sort",
       [
@@ -516,8 +561,15 @@ const A = {
     wizard();
   },
   clearf: () => {
-    V.q = "";
-    V.status = "";
+    Object.assign(V, { q: "", status: "", from: "", to: "" });
+    route();
+  },
+  cleare: () => {
+    Object.assign(E, { q: "", status: "", from: "", to: "", page: 1 });
+    route();
+  },
+  page: (t) => {
+    E.page = +t.dataset.p;
     route();
   },
   showpw: (t) => {
@@ -562,6 +614,7 @@ const A = {
     if (confirm("Excluir este evento? Esta ação não pode ser desfeita.")) {
       await api("DELETE", "/events/" + t.dataset.id);
       toast("Evento excluído.");
+      if (location.hash == "#/events") return route();
       location.hash = "#/events";
     }
   },
@@ -684,6 +737,7 @@ document.addEventListener("change", async (ev) => {
   const t = ev.target;
   if (t.dataset.o) {
     O[t.dataset.o][t.dataset.k] = t.value;
+    E.page = 1;
     route();
   }
   if (t.dataset.chg == "status") {
