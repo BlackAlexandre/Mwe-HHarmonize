@@ -753,3 +753,29 @@ dialog {
 .stat small {
   letter-spacing: 0.06em;
 }
+/* Logo oficial no menu compartilhado */
+.brand-logo {
+  display: block;
+  width: 100%;
+  max-width: 150px;
+  height: auto;
+  margin: 0 0 12px;
+  border-radius: 12px;
+  object-fit: contain;
+}
+@media (max-width: 800px) {
+  .side .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 20px;
+  }
+  .side .logo small {
+    display: none;
+  }
+  .brand-logo {
+    width: 56px;
+    max-width: 56px;
+    margin: 0;
+  }
+}

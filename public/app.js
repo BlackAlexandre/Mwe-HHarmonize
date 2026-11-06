@@ -88,7 +88,7 @@ const NAV = [
   ],
   SOON = ["Financeiro", "Equipe", "Repertório", "Relatórios"];
 const shell = (page, title, body, actions = "") => {
-  app.innerHTML = `<aside class="side"><div class="logo">MWE Harmonize<small>Gestão de Eventos Musicais</small></div><nav>${NAV.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}">${l}</a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante">${l}<small>em breve</small></span>`).join("")}</nav><a class="btn rose" href="#/event/new">Novo evento</a><div class="me"><a class="link" href="#/account">${e(me.name || me.email)}</a><button data-act="logout" class="link">Sair</button></div></aside><main><header class="top"><h1>${title}</h1><div>${actions}</div></header>${body}</main><nav class="tabbar" aria-label="Navegação principal">${[
+  app.innerHTML = `<aside class="side"><div class="logo"><img class="brand-logo" src="logo.jpg" width="150" height="120" alt="Logo MWE Harmonize">MWE Harmonize<small>Gestão de Eventos Musicais</small></div><nav>${NAV.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}">${l}</a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante">${l}<small>em breve</small></span>`).join("")}</nav><a class="btn rose" href="#/event/new">Novo evento</a><div class="me"><a class="link" href="#/account">${e(me.name || me.email)}</a><button data-act="logout" class="link">Sair</button></div></aside><main><header class="top"><h1>${title}</h1><div>${actions}</div></header>${body}</main><nav class="tabbar" aria-label="Navegação principal">${[
     ["overview", "Início"],
     ["agenda", "Agenda"],
     ["events", "Eventos"],
