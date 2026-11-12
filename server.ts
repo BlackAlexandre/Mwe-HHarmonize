@@ -45,6 +45,10 @@ for (const [c, t] of [
   if (!evCols.includes(c)) db.exec(`ALTER TABLE events ADD COLUMN ${c} ${t}`);
 db.exec(`CREATE TABLE IF NOT EXISTS repertoire(id INTEGER PRIMARY KEY,event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,moment TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,title TEXT NOT NULL,performer TEXT,notes TEXT);
 CREATE INDEX IF NOT EXISTS rep_event ON repertoire(event_id);`);
+// Equipe: tabela nova e aditiva (nenhum dado existente é alterado)
+db.exec(
+  `CREATE TABLE IF NOT EXISTS integrantes_equipe(id INTEGER PRIMARY KEY,name TEXT NOT NULL,role TEXT NOT NULL,phone TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'ativo',created_at TEXT DEFAULT CURRENT_TIMESTAMP);`,
+);
 
 if (
   !one("SELECT id FROM users") &&
@@ -493,6 +497,71 @@ app.get("/api/overview", auth, (_q, res) => {
     ),
   });
 });
+// ---------- Equipe (integração das páginas do Wesley) ----------
+const TEAM_ROLES = ["Músico", "Técnico", "Mídia", "Administrativo"];
+const TQ =
+  "SELECT id,name,role,phone,status,created_at FROM integrantes_equipe";
+const tval = (b: any) => {
+  const f: any = {};
+  if (!String(b?.name ?? "").trim()) f.name = "Informe o nome completo.";
+  if (!TEAM_ROLES.includes(b?.role)) f.role = "Selecione uma função válida.";
+  if (String(b?.phone ?? "").replace(/\D/g, "").length < 8)
+    f.phone = "Informe um telefone válido.";
+  if (b?.status !== undefined && !["ativo", "inativo"].includes(b.status))
+    f.status = "Status inválido.";
+  return f;
+};
+const tdup = (b: any, id = 0) =>
+  one(
+    "SELECT id FROM integrantes_equipe WHERE lower(name)=lower(?) AND replace(replace(replace(replace(phone,' ',''),'-',''),'(',''),')','')=? AND id<>?",
+    String(b.name).trim(),
+    String(b.phone).replace(/[\s\-()]/g, ""),
+    id,
+  );
+app.use("/api/team", auth);
+app.get("/api/team", (_q, res) =>
+  res.json(all(`${TQ} ORDER BY name COLLATE NOCASE`)),
+);
+app.post("/api/team", (req, res) => {
+  const f = tval(req.body);
+  if (Object.keys(f).length) return fail(res, 422, "Dados inválidos.", f);
+  if (tdup(req.body))
+    return fail(res, 409, "Este integrante já está cadastrado.");
+  const b = req.body,
+    r = run(
+      "INSERT INTO integrantes_equipe(name,role,phone,status) VALUES(?,?,?,?)",
+      String(b.name).trim(),
+      b.role,
+      String(b.phone).trim(),
+      b.status || "ativo",
+    );
+  res.status(201).json(one(`${TQ} WHERE id=?`, Number(r.lastInsertRowid)));
+});
+app.put("/api/team/:id", (req, res) => {
+  if (!one("SELECT id FROM integrantes_equipe WHERE id=?", req.params.id))
+    return fail(res, 404, "Integrante não encontrado.");
+  const f = tval(req.body);
+  if (Object.keys(f).length) return fail(res, 422, "Dados inválidos.", f);
+  if (tdup(req.body, Number(req.params.id)))
+    return fail(res, 409, "Este integrante já está cadastrado.");
+  const b = req.body;
+  run(
+    "UPDATE integrantes_equipe SET name=?,role=?,phone=?,status=? WHERE id=?",
+    String(b.name).trim(),
+    b.role,
+    String(b.phone).trim(),
+    b.status || "ativo",
+    req.params.id,
+  );
+  res.json(one(`${TQ} WHERE id=?`, req.params.id));
+});
+app.delete("/api/team/:id", (req, res) => {
+  if (!one("SELECT id FROM integrantes_equipe WHERE id=?", req.params.id))
+    return fail(res, 404, "Integrante não encontrado.");
+  run("DELETE FROM integrantes_equipe WHERE id=?", req.params.id);
+  res.json({ ok: true });
+});
+
 app.use("/api", (_q, res) => fail(res, 404, "Rota não encontrada."));
 app.use(express.static("public"));
 app.use((e: any, _q: any, res: any, _n: any) => {

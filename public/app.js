@@ -78,26 +78,69 @@ const V = {
   },
   E = { q: "", status: "", from: "", to: "" },
   C = { q: "", sort: "recent", status: "" };
-const O = { V, E, C };
+const TM = { q: "", role: "" };
+const O = { V, E, C, TM };
 
 const NAV = [
     ["overview", "Visão Geral"],
     ["agenda", "Agenda"],
     ["events", "Eventos"],
     ["clients", "Clientes"],
+    ["team", "Equipe"],
   ],
-  SOON = ["Financeiro", "Equipe", "Repertório", "Relatórios"];
+  SOON = ["Financeiro", "Repertório", "Relatórios"];
+const SUBS = {
+  overview: "Resumo dos seus eventos e indicadores",
+  agenda: "Planeje eventos, ensaios e compromissos da equipe.",
+  events: "Acompanhe contratos, propostas e a operação de cada evento.",
+  clients: "Gerencie seu portfólio de clientes e casais.",
+  team: "Gerencie os integrantes e suas funções",
+  account: "Gerencie seus dados de acesso",
+};
+const subOf = (page, title) =>
+  /^(Cadastrar|Editar)/.test(title)
+    ? "Preencha os dados principais para iniciar o planejamento."
+    : /^Detalhes/.test(title)
+      ? "Consulte as informações completas do evento."
+      : SUBS[page] || "";
+const ini2 = (n) => {
+  const w = String(n)
+    .split(/\s+/)
+    .filter((x) => /^[\p{L}\p{N}]/u.test(x));
+  return (
+    w.length > 1 ? w[0][0] + w[1][0] : (w[0] || "?").slice(0, 2)
+  ).toUpperCase();
+};
+const ic = (p) =>
+  `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+const CI = {
+  cal: ic(
+    '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  ),
+  pin: ic(
+    '<path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0116 0z"/><circle cx="12" cy="10" r="3"/>',
+  ),
+  phone: ic(
+    '<path d="M22 16.9v3a2 2 0 01-2.2 2 19.8 19.8 0 01-8.6-3.1 19.5 19.5 0 01-6-6A19.8 19.8 0 012.1 4.2 2 2 0 014.1 2h3a2 2 0 012 1.7c.1 1 .4 1.9.7 2.8a2 2 0 01-.5 2.1L8.1 9.9a16 16 0 006 6l1.3-1.3a2 2 0 012.1-.4c.9.3 1.8.6 2.8.7a2 2 0 011.7 2z"/>',
+  ),
+  mail: ic(
+    '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+  ),
+};
+const ciRow = (i, t) => (t ? `<li>${CI[i]}<span>${e(t)}</span></li>` : "");
+const longDate = (s) =>
+  s
+    ? pd(s).toLocaleDateString("pt-BR", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })
+    : "";
 const shell = (page, title, body, actions = "") => {
-  app.innerHTML = `<aside class="side"><div class="logo"><img class="brand-logo" src="logo.jpg" width="150" height="120" alt="Logo MWE Harmonize">MWE Harmonize<small>Gestão de Eventos Musicais</small></div><nav>${NAV.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}">${l}</a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante">${l}<small>em breve</small></span>`).join("")}</nav><a class="btn rose" href="#/event/new">Novo evento</a><div class="me"><a class="link" href="#/account">${e(me.name || me.email)}</a><button data-act="logout" class="link">Sair</button></div></aside><main><header class="top"><h1>${title}</h1><div>${actions}</div></header>${body}</main><nav class="tabbar" aria-label="Navegação principal">${[
-    ["overview", "Início"],
-    ["agenda", "Agenda"],
-    ["events", "Eventos"],
-    ["clients", "Clientes"],
-  ]
-    .map(
-      ([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}">${l}</a>`,
-    )
-    .join("")}<a href="#/account">Conta</a></nav>`;
+  const who = me.name || me.email,
+    tab = ([k, l]) =>
+      `<a href="#/${k}" class="${k == page ? "on" : ""}">${k == "overview" ? "Início" : l}</a>`;
+  app.innerHTML = `<aside class="side"><a class="logo" href="#/overview"><img class="brand-logo" src="logo.jpg" width="150" height="120" alt="Logo MWE Harmonize"><span class="leg_mwe">MWE Harmonize</span><small>Gestão de Eventos Musicais</small></a><nav aria-label="Menu principal">${NAV.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}"${k == page ? ' aria-current="page"' : ""}><span class="ni">${navIcon(k)}<b>${l}</b></span></a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante"><span class="ni">${navIcon(l)}<b>${l}</b></span><small>em breve</small></span>`).join("")}</nav><a class="btn rose newbtn" href="#/event/new">Novo evento</a><div class="me side-user"><a class="avatar" href="#/account" aria-label="Minha conta">${e(ini2(who))}</a><a class="who" href="#/account"><b>${e(who)}</b><small>${e(me.email || "")}</small></a><button type="button" data-act="logout" class="exit" title="Sair" aria-label="Sair">↪</button></div></aside><div class="workspace"><header class="top"><div class="leg_cabecalho"><h1>${title}</h1><p>${e(subOf(page, title))}</p></div><div class="head-actions">${actions}</div><div class="top-user"><span class="avatar">${e(ini2(who))}</span><span><b>${e(who)}</b><small>MWE Harmonize</small></span></div></header><main>${body}</main></div><nav class="tabbar" aria-label="Navegação principal">${NAV.map(tab).join("")}<a href="#/account">Conta</a></nav>`;
 };
 const authCard = (inner, split) => {
   app.innerHTML = split
@@ -124,6 +167,7 @@ async function route() {
   const f =
     {
       overview: overviewView,
+      team: teamView,
       account: accountView,
       agenda: agendaView,
       events: eventsView,
@@ -156,6 +200,45 @@ const resetView = (t) =>
   );
 
 // ---------- Visão geral e conta ----------
+// ---------- Equipe (páginas do Wesley adaptadas ao app, com dados reais) ----------
+const TEAM_ROLES = ["Músico", "Técnico", "Mídia", "Administrativo"];
+const ICONS = {
+  overview: "visao_geral",
+  agenda: "agenda",
+  events: "evento",
+  clients: "cliente",
+  team: "equipe",
+  Repertório: "repertorio",
+  Financeiro: "financeiro",
+  Relatórios: "relatorio",
+};
+const navIcon = (k) =>
+  ICONS[k]
+    ? `<img class="mi" src="icons/${ICONS[k]}.png" alt="" width="20" height="20">`
+    : "";
+async function teamView() {
+  const all = await api("GET", "/team"),
+    term = TM.q.trim().toLowerCase(),
+    ym = new Date().toISOString().slice(0, 7);
+  const rows = all.filter(
+    (x) =>
+      (!TM.role || x.role == TM.role) &&
+      (!term ||
+        [x.name, x.role, x.phone, x.status]
+          .join(" ")
+          .toLowerCase()
+          .includes(term)),
+  );
+  const stat = (l, v, i) =>
+    `<article class="card tstat"><div><small>${l}</small><strong>${v}</strong></div><i aria-hidden="true">${i}</i></article>`;
+  shell(
+    "team",
+    "Equipe",
+    `<div class="cards stats4">${stat("Total cadastrado", all.length, "▦")}${stat("Ativos", all.filter((x) => x.status == "ativo").length, "✓")}${stat("Este mês", all.filter((x) => (x.created_at || "").startsWith(ym)).length, "◷")}${stat("Inativos", all.filter((x) => x.status == "inativo").length, "!")}</div><div class="card" style="margin-top:16px"><div class="bar"><input type="search" data-o="TM" data-k="q" placeholder="Buscar cadastro" aria-label="Buscar cadastro" value="${e(TM.q)}">${sel("", "r", [["", "Todos"], ...TEAM_ROLES.map((r) => [r, r])], TM.role, 'data-o="TM" data-k="role" aria-label="Filtrar por função"')}</div><div class="scroll"><table class="tbl"><thead><tr><th>Integrante</th><th>Função</th><th>Telefone</th><th>Status</th><th style="text-align:right">Ações</th></tr></thead><tbody>${rows.map((m) => `<tr><td><div class="person"><span class="avatar">${e(ini2(m.name))}</span><b>${e(m.name)}</b></div></td><td>${e(m.role)}</td><td>${e(m.phone)}</td><td><span class="badge ${m.status == "ativo" ? "s-confirmado" : "off"}">${m.status == "ativo" ? "Ativo" : "Inativo"}</span></td><td><div class="actions"><button type="button" data-act="editmember" data-c='${e(JSON.stringify(m))}' title="Editar" aria-label="Editar ${e(m.name)}">✎</button><button type="button" data-act="delmember" data-id="${m.id}" title="Excluir" aria-label="Excluir ${e(m.name)}">⌫</button></div></td></tr>`).join("") || '<tr><td colspan="5"><div class="empty note"><div><b>Nenhum cadastro encontrado</b>Use o botão de novo cadastro para começar.</div></div></td></tr>'}</tbody></table></div></div><dialog id="dlg"></dialog>`,
+    '<button class="btn" data-act="editmember" data-c="{}">+ Novo cadastro</button>',
+  );
+}
+
 async function overviewView() {
   const o = await api("GET", "/overview"),
     box = (l, n) =>
@@ -260,7 +343,7 @@ async function agendaView() {
   } else {
     grid = ev.length
       ? `<div class="list">${groupDays(ev)}</div>`
-      : '<p class="note">Nenhum evento neste período.</p>';
+      : '<div class="empty note"><div><b>Nenhum evento neste período</b>Use "Novo evento" ou clique em um dia para criar um compromisso.</div></div>';
   }
   const title = mode == "week" ? `${fmt(iso(a))} – ${fmt(iso(b))}` : mes(cur);
   shell(
@@ -324,7 +407,7 @@ async function eventsView() {
   shell(
     "events",
     "Eventos",
-    `<div class="cards">${box("EVENTOS CONFIRMADOS", n("confirmado"), "no total")}${box("PROPOSTAS PENDENTES", n("pendente"), "aguardando retorno")}${box("EM PREPARAÇÃO", n("preparacao"), "em andamento")}</div><div class="bar" style="margin-top:16px"><input data-o="E" data-k="q" placeholder="Buscar por evento, cliente ou local..." value="${e(E.q)}">${sel("", "s", statusOpts, E.status, 'data-o="E" data-k="status" aria-label="Status"')}<input type="date" data-o="E" data-k="from" value="${e(E.from)}" aria-label="Data inicial"><input type="date" data-o="E" data-k="to" value="${e(E.to)}" aria-label="Data final">${E.q || E.status || E.from || E.to ? '<button class="btn ghost" data-act="cleare">Limpar filtros</button>' : ""}<a class="btn ghost" href="#/agenda">Calendário</a></div><div class="card"><div class="between"><h3>Lista de eventos</h3><span class="note">${ev.length} evento(s)</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Evento / cliente</th><th>Data</th><th>Local</th><th>Formação</th><th>Status</th><th>Ações</th></tr></thead><tbody>${rows.map((x) => `<tr><td><b>${e(x.name)}</b><br><small>${e(x.client_name || "Sem cliente")}</small></td><td>${fmt(x.date)}<br><small>${e(x.start_time || "")}</small></td><td>${e(x.venue || "—")}<br><small>${e(x.city || "")}</small></td><td>${e(x.lineup || "—")}</td><td>${badge(x.status)}</td><td class="nw"><a class="link" href="#/event/${x.id}">Ver</a> · <a class="link" href="#/event/${x.id}/edit">Editar</a> · <button class="link" data-act="delevent" data-id="${x.id}">Excluir</button></td></tr>`).join("") || '<tr><td colspan="6" class="note">Nenhum evento encontrado.</td></tr>'}</tbody></table></div><div class="between"><span class="note">Exibindo ${rows.length ? (pg - 1) * per + 1 : 0}–${(pg - 1) * per + rows.length} de ${ev.length}</span><div class="acts">${Array.from({ length: pages }, (_, i) => `<button class="btn ${i + 1 == pg ? "" : "ghost"}" data-act="page" data-p="${i + 1}" aria-label="Página ${i + 1}">${i + 1}</button>`).join("")}</div></div></div>`,
+    `<div class="cards">${box("EVENTOS CONFIRMADOS", n("confirmado"), "no total")}${box("PROPOSTAS PENDENTES", n("pendente"), "aguardando retorno")}${box("EM PREPARAÇÃO", n("preparacao"), "em andamento")}</div><div class="bar" style="margin-top:16px"><input data-o="E" data-k="q" placeholder="Buscar por evento, cliente ou local..." value="${e(E.q)}">${sel("", "s", statusOpts, E.status, 'data-o="E" data-k="status" aria-label="Status"')}<input type="date" data-o="E" data-k="from" value="${e(E.from)}" aria-label="Data inicial"><input type="date" data-o="E" data-k="to" value="${e(E.to)}" aria-label="Data final">${E.q || E.status || E.from || E.to ? '<button class="btn ghost" data-act="cleare">Limpar filtros</button>' : ""}<a class="btn ghost" href="#/agenda">Calendário</a></div><div class="card"><div class="between"><h3>Lista de eventos</h3><span class="note">${ev.length} evento(s)</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Evento / cliente</th><th>Data</th><th>Local</th><th>Formação</th><th>Status</th><th>Ações</th></tr></thead><tbody>${rows.map((x) => `<tr><td><b>${e(x.name)}</b><br><small>${e(x.client_name || "Sem cliente")}</small></td><td>${fmt(x.date)}<br><small>${e(x.start_time || "")}</small></td><td>${e(x.venue || "—")}<br><small>${e(x.city || "")}</small></td><td>${e(x.lineup || "—")}</td><td>${badge(x.status)}</td><td class="nw"><a class="link" href="#/event/${x.id}">Ver</a> · <a class="link" href="#/event/${x.id}/edit">Editar</a> · <button class="link" data-act="delevent" data-id="${x.id}">Excluir</button></td></tr>`).join("") || '<tr><td colspan="6"><div class="empty note"><div><b>Nenhum evento encontrado</b>Ajuste os filtros ou use "Novo evento" para começar.</div></div></td></tr>'}</tbody></table></div><div class="between"><span class="note">Exibindo ${rows.length ? (pg - 1) * per + 1 : 0}–${(pg - 1) * per + rows.length} de ${ev.length}</span><div class="acts">${Array.from({ length: pages }, (_, i) => `<button class="btn ${i + 1 == pg ? "" : "ghost"}" data-act="page" data-p="${i + 1}" aria-label="Página ${i + 1}">${i + 1}</button>`).join("")}</div></div></div>`,
     '<a class="btn" href="#/event/new">+ Novo evento</a>',
   );
 }
@@ -340,7 +423,7 @@ const money = (v) =>
 const ini = (n) =>
   String(n)
     .split(/\s+/)
-    .filter(Boolean)
+    .filter((w) => /^[\p{L}\p{N}]/u.test(w))
     .slice(0, 2)
     .map((w) => w[0])
     .join("")
@@ -543,13 +626,43 @@ async function clientsView() {
       ],
       C.sort,
       'data-o="C" data-k="sort" style="width:auto"',
-    )}</div><div class="cards">${cl.map((c) => `<div class="card"><div class="chead"><span class="av">${ini(c.name)}</span><div><h3>${e(c.name)}</h3><small>${e(c.ev_type || "Sem evento")}</small></div>${c.ev_status ? badge(c.ev_status) : ""}</div><p class="note">${e(c.email || "Sem e-mail")}<br>${e(c.phone || "Sem telefone")}<br>${c.ev_date ? fmt(c.ev_date) + " · " + e(c.ev_venue || "Local a definir") + "<br>" : ""}${c.n} evento(s)</p>${c.notes ? `<p>${e(c.notes)}</p>` : ""}<div class="acts"><button class="btn ghost" data-act="editclient" data-c='${e(JSON.stringify(c))}'>Editar</button><button class="btn danger" data-act="delclient" data-id="${c.id}">Excluir</button></div></div>`).join("") || '<p class="note">Nenhum cliente encontrado.</p>'}</div><dialog id="dlg"></dialog>`,
+    )}</div><div class="cards client-grid">${cl.map((c) => `<article class="card client-card"><header class="client-top"><span class="client-avatar">${ini(c.name)}</span><div class="client-id"><h3>${e(c.name)}</h3><small>${e(c.ev_type || "Sem evento")}</small></div>${c.ev_status ? badge(c.ev_status) : ""}</header><ul class="client-info">${ciRow("cal", c.ev_date ? longDate(c.ev_date) : "")}${ciRow("pin", c.ev_venue)}${ciRow("phone", c.phone)}${ciRow("mail", c.email)}<li class="muted"><span>${c.n} evento(s)</span></li></ul>${c.notes ? `<p class="client-notes">${e(c.notes)}</p>` : ""}<div class="client-actions"><button type="button" data-act="editclient" data-c='${e(JSON.stringify(c))}' title="Editar" aria-label="Editar cliente ${e(c.name)}">✎</button><button type="button" data-act="delclient" data-id="${c.id}" title="Excluir" aria-label="Excluir cliente ${e(c.name)}">⌫</button></div></article>`).join("") || '<div class="empty note"><div><b>Nenhum cliente encontrado</b>Use o botão "Novo cliente" para começar.</div></div>'}</div><dialog id="dlg"></dialog>`,
     `<button class="btn" data-act="editclient" data-c="{}">+ Novo cliente</button>`,
   );
 }
 
 // ---------- Eventos de UI ----------
 const A = {
+  editmember: (t) => {
+    const m = JSON.parse(t.dataset.c),
+      d = $("#dlg");
+    d.innerHTML = `<h3>${m.id ? "Editar" : "Novo"} cadastro</h3><form data-form="member"><input type="hidden" name="id" value="${m.id || ""}">${field("Nome completo *", "name", m.name, "text", "required")}${sel(
+      "Função",
+      "role",
+      TEAM_ROLES.map((r) => [r, r]),
+      m.role || "Músico",
+    )}${field("Telefone *", "phone", m.phone, "tel", "required")}${sel(
+      "Status",
+      "status",
+      [
+        ["ativo", "Ativo"],
+        ["inativo", "Inativo"],
+      ],
+      m.status || "ativo",
+    )}<div class="acts"><button type="button" class="btn ghost" onclick="this.closest('dialog').close()">Cancelar</button><button class="btn">Salvar</button></div></form>`;
+    d.showModal();
+  },
+  delmember: async (t) => {
+    if (!confirm("Deseja excluir este cadastro?")) return;
+    try {
+      await api("DELETE", "/team/" + t.dataset.id);
+      toast("Cadastro excluído.");
+      route();
+    } catch (x) {
+      toast(errMsg(x), 1);
+    }
+  },
+
   addrep: (t) => {
     readForm(t.closest("form"));
     W.d.repertoire.push({ moment: "entrada", title: "" });
@@ -636,6 +749,17 @@ const A = {
   },
 };
 const FORMS = {
+  member: async (f) => {
+    const d = Object.fromEntries(new FormData(f));
+    try {
+      await api(d.id ? "PUT" : "POST", "/team" + (d.id ? "/" + d.id : ""), d);
+      toast("Cadastro salvo com sucesso.");
+      route();
+    } catch (x) {
+      toast(errMsg(x), 1);
+    }
+  },
+
   profile: async (f) => {
     try {
       await api("PUT", "/account", Object.fromEntries(new FormData(f)));
