@@ -224,6 +224,89 @@ test("eventos, clientes, conta, status e exclusão", async () => {
   );
 });
 
+test("equipe (Wesley): menu com ícones, cadastro, filtro, edição e exclusão com dados reais", async () => {
+  (dom.window as any).HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+  go("#/team");
+  await until(
+    () => $$(".tstat").length == 4 && $$(".side nav a img.mi").length >= 5,
+    "equipe",
+  );
+  assert.equal($$(".tstat").length, 4);
+  assert.ok(
+    $$(".side nav a").some((a) => a.textContent.includes("Equipe")),
+    "Equipe no menu",
+  );
+  assert.ok(
+    !$$(".soon").some((s) => s.textContent.includes("Equipe")),
+    "Equipe não é mais placeholder",
+  );
+  $(".top [data-act=editmember]").click();
+  await until(() => $("form[data-form=member]"), "formulário");
+  fill("name", "Marina Souza");
+  fill("role", "Técnico");
+  fill("phone", "(41) 98888-7777");
+  submit("form[data-form=member]");
+  await until(
+    () =>
+      $$("table.tbl tbody tr").some((r) =>
+        r.textContent.includes("Marina Souza"),
+      ),
+    "linha criada",
+  );
+  assert.equal($$(".tstat strong")[0].textContent, "1");
+  assert.equal($$(".tstat strong")[1].textContent, "1");
+  change("[data-k=role]", "Mídia");
+  await until(
+    () =>
+      $("table.tbl tbody").textContent.includes("Nenhum cadastro encontrado"),
+    "filtro por função",
+  );
+  change("[data-k=role]", "");
+  await until(
+    () => $("table.tbl tbody").textContent.includes("Marina Souza"),
+    "filtro limpo",
+  );
+  change("[data-k=q]", "zzz");
+  await until(
+    () =>
+      $("table.tbl tbody").textContent.includes("Nenhum cadastro encontrado"),
+    "busca",
+  );
+  change("[data-k=q]", "");
+  await until(
+    () => $("table.tbl tbody").textContent.includes("Marina Souza"),
+    "busca limpa",
+  );
+  $("[data-act=editmember][aria-label^=Editar]").click();
+  await until(
+    () => $("form[data-form=member] [name=name]").value == "Marina Souza",
+    "edição preenchida",
+  );
+  fill("status", "inativo");
+  submit("form[data-form=member]");
+  await until(
+    () => $("table.tbl tbody .badge")?.textContent == "Inativo",
+    "status atualizado",
+  );
+  assert.equal($$(".tstat strong")[3].textContent, "1");
+  $("[data-act=delmember]").click();
+  await until(
+    () =>
+      $("table.tbl tbody").textContent.includes("Nenhum cadastro encontrado"),
+    "excluído",
+  );
+  for (const path of [
+    "/icons/equipe.png",
+    "/icons/evento.png",
+    "/logo_icon.png",
+  ]) {
+    const r = await fetch(B + path);
+    assert.equal(r.status, 200, path);
+    assert.match(r.headers.get("content-type")!, /image\/png/);
+  }
+});
 test("celular: mês vira lista agrupada por dia; logout volta ao login", async () => {
   await api("POST", "/api/events", {
     name: "Evento mobile",

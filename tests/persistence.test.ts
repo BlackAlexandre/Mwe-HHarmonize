@@ -74,3 +74,28 @@ test("clientes, eventos e repertório persistem após reiniciar o servidor", asy
   assert.equal(got.repertoire.length, 1);
   await stop(s);
 });
+
+test("integrantes da equipe persistem após reiniciar o servidor", async () => {
+  rmSync(DB, { force: true });
+  let s = await start(),
+    ck = await login();
+  const res = await fetch(B + "/api/team", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: ck },
+    body: JSON.stringify({
+      name: "Lucas Andrade",
+      role: "Músico",
+      phone: "41999990000",
+      status: "ativo",
+    }),
+  });
+  const m = await res.json();
+  await stop(s);
+  s = await start();
+  ck = await login();
+  const list = await (
+    await fetch(B + "/api/team", { headers: { cookie: ck } })
+  ).json();
+  assert.equal(list.find((x: any) => x.id == m.id)?.name, "Lucas Andrade");
+  await stop(s);
+});

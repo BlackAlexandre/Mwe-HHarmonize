@@ -552,3 +552,55 @@ test("duplicidade, filtros de período e filtro de clientes por status", async (
   assert.equal(await has("confirmado"), false);
   assert.equal(await has("sem"), false);
 });
+
+test("equipe (Wesley): exige login, valida, cadastra, edita, impede duplicidade e exclui", async () => {
+  assert.equal((await call("GET", "/api/team", undefined, "")).s, 401);
+  await call("POST", "/api/auth/login", {
+    email: "novo@t.com",
+    password: "outra-senha-9",
+  });
+  const body = {
+    name: "Carolina Martins",
+    role: "Músico",
+    phone: "(41) 99999-0000",
+    status: "ativo",
+  };
+  assert.equal(
+    (await call("POST", "/api/team", { ...body, name: " " })).s,
+    422,
+  );
+  assert.equal(
+    (await call("POST", "/api/team", { ...body, role: "Cantor" })).s,
+    422,
+  );
+  assert.equal(
+    (await call("POST", "/api/team", { ...body, phone: "123" })).s,
+    422,
+  );
+  assert.equal(
+    (await call("POST", "/api/team", { ...body, status: "x" })).s,
+    422,
+  );
+  const c = await call("POST", "/api/team", body);
+  assert.equal(c.s, 201);
+  assert.equal(c.j.status, "ativo");
+  assert.ok(c.j.created_at);
+  assert.equal(
+    (await call("POST", "/api/team", { ...body, phone: "41 99999 0000" })).s,
+    409,
+    "mesmo nome e telefone",
+  );
+  const u = await call("PUT", "/api/team/" + c.j.id, {
+    ...body,
+    role: "Técnico",
+    status: "inativo",
+  });
+  assert.equal(u.j.role, "Técnico");
+  assert.equal(u.j.status, "inativo");
+  assert.equal((await call("PUT", "/api/team/99999", body)).s, 404);
+  assert.ok(
+    (await call("GET", "/api/team")).j.some((x: any) => x.id == c.j.id),
+  );
+  assert.equal((await call("DELETE", "/api/team/" + c.j.id)).s, 200);
+  assert.equal((await call("DELETE", "/api/team/" + c.j.id)).s, 404);
+});
