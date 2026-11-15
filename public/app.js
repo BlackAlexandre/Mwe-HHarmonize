@@ -1,5 +1,43 @@
 const $ = (s) => document.querySelector(s),
   app = $("#app");
+const A11Y_STORAGE_KEY = "mwe-acessibilidade";
+const A11Y_DEFAULTS = {
+  tamanho: "1",
+  contraste: false,
+  foco: false,
+  animacoes: false,
+  alertas: false,
+};
+const readA11yPreferences = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(A11Y_STORAGE_KEY));
+    if (!saved || typeof saved !== "object" || Array.isArray(saved))
+      return { ...A11Y_DEFAULTS };
+    return {
+      tamanho: ["1", "1.25", "1.5"].includes(String(saved.tamanho))
+        ? String(saved.tamanho)
+        : A11Y_DEFAULTS.tamanho,
+      contraste: typeof saved.contraste === "boolean" ? saved.contraste : false,
+      foco: typeof saved.foco === "boolean" ? saved.foco : false,
+      animacoes: typeof saved.animacoes === "boolean" ? saved.animacoes : false,
+      alertas: typeof saved.alertas === "boolean" ? saved.alertas : false,
+    };
+  } catch {
+    return { ...A11Y_DEFAULTS };
+  }
+};
+let a11yPreferences = readA11yPreferences();
+function applyA11yPreferences() {
+  document.documentElement.style.setProperty(
+    "--a11y-scale",
+    a11yPreferences.tamanho,
+  );
+  document.body.classList.toggle("a11y-high-contrast", a11yPreferences.contraste);
+  document.body.classList.toggle("a11y-focus-always", a11yPreferences.foco);
+  document.body.classList.toggle("a11y-reduce-motion", a11yPreferences.animacoes);
+  document.body.classList.toggle("a11y-visual-alerts", a11yPreferences.alertas);
+}
+applyA11yPreferences();
 const e = (s) =>
   String(s ?? "").replace(
     /[&<>"']/g,
@@ -40,12 +78,22 @@ const fmt = (s) =>
         year: "numeric",
       })
     : "—";
+function formatConfiguredDate(s, format = "dd/mm/aaaa") {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s || "")) return "";
+  const [year, month, day] = s.split("-");
+  if (format === "aaaa-mm-dd") return `${year}-${month}-${day}`;
+  if (format === "mm/dd/aaaa") return `${month}/${day}/${year}`;
+  return `${day}/${month}/${year}`;
+}
 const mes = (d) =>
   d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 const toast = (m, err) => {
   const t = document.createElement("div");
   t.className = "toast" + (err ? " err" : "");
-  t.textContent = m;
+  t.setAttribute("role", "status");
+  t.setAttribute("aria-live", "polite");
+  t.setAttribute("aria-atomic", "true");
+  t.textContent = a11yPreferences.alertas ? `Aviso: ${m}` : m;
   document.body.append(t);
   setTimeout(() => t.remove(), 3500);
 };
@@ -65,8 +113,19 @@ const field = (l, n, v = "", t = "text", x = "") =>
   `<label>${l}<input name="${n}" type="${t}" value="${e(v)}" ${x}></label>`;
 const sel = (l, n, o, v, x = "") =>
   `<label>${l}<select name="${n}" ${x}>${o.map(([k, t]) => `<option value="${e(k)}" ${String(k) === String(v ?? "") ? "selected" : ""}>${e(t)}</option>`).join("")}</select></label>`;
-const badge = (s) => `<span class="badge s-${s}">${ST[s] || s}</span>`;
+const FIN_ST = {
+  pendente: "A receber",
+  pago: "Recebido",
+  atrasado: "Atrasado",
+  cancelado: "Cancelado",
+};
+const badge = (s) =>
+  `<span class="badge s-${s}">${ST[s] || FIN_ST[s] || s}</span>`;
 const statusOpts = [["", "Todos os status"], ...Object.entries(ST)];
+const financeStatusOpts = [
+  ["", "Todos os status"],
+  ...Object.entries(FIN_ST),
+];
 let me = null;
 const V = {
     from: "",
@@ -77,24 +136,38 @@ const V = {
     status: "",
   },
   E = { q: "", status: "", from: "", to: "" },
-  C = { q: "", sort: "recent", status: "" };
+  C = { q: "", sort: "recent", status: "" },
+  F = { q: "", status: "", from: "", to: "" };
 const TM = { q: "", role: "" };
-const O = { V, E, C, TM };
+const R = { eventId: "", q: "" };
+const O = { V, E, C, TM, F, R };
 
 const NAV = [
     ["overview", "Visão Geral"],
     ["agenda", "Agenda"],
     ["events", "Eventos"],
     ["clients", "Clientes"],
+    ["finances", "Financeiro"],
+    ["reports", "Relatórios"],
     ["team", "Equipe"],
+    ["repertoire", "Repertório"],
+    ["settings", "Configurações"],
+    ["accessibility", "Acessibilidade"],
+    ["admin", "Colaboradores"],
   ],
-  SOON = ["Financeiro", "Repertório", "Relatórios"];
+  SOON = [];
 const SUBS = {
   overview: "Resumo dos seus eventos e indicadores",
   agenda: "Planeje eventos, ensaios e compromissos da equipe.",
   events: "Acompanhe contratos, propostas e a operação de cada evento.",
   clients: "Gerencie seu portfólio de clientes e casais.",
+  finances: "Acompanhe recebimentos, parcelas e vencimentos.",
+  reports: "Consulte indicadores e exporte relatórios.",
   team: "Gerencie os integrantes e suas funções",
+  repertoire: "Organize músicas, momentos e aprovação por evento.",
+  settings: "Gerencie o perfil da empresa e as preferências da conta.",
+  accessibility: "Ajuste leitura, contraste, movimento e formas de interação.",
+  admin: "Gerencie colaboradores, permissões e auditoria da organização.",
   account: "Gerencie seus dados de acesso",
 };
 const subOf = (page, title) =>
@@ -137,10 +210,11 @@ const longDate = (s) =>
       })
     : "";
 const shell = (page, title, body, actions = "") => {
+  const visibleNav = NAV.filter(([key]) => key !== "admin" || me.role === "admin");
   const who = me.name || me.email,
     tab = ([k, l]) =>
       `<a href="#/${k}" class="${k == page ? "on" : ""}">${k == "overview" ? "Início" : l}</a>`;
-  app.innerHTML = `<aside class="side"><a class="logo" href="#/overview"><img class="brand-logo" src="logo.jpg" width="150" height="120" alt="Logo MWE Harmonize"><span class="leg_mwe">MWE Harmonize</span><small>Gestão de Eventos Musicais</small></a><nav aria-label="Menu principal">${NAV.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}"${k == page ? ' aria-current="page"' : ""}><span class="ni">${navIcon(k)}<b>${l}</b></span></a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante"><span class="ni">${navIcon(l)}<b>${l}</b></span><small>em breve</small></span>`).join("")}</nav><a class="btn rose newbtn" href="#/event/new">Novo evento</a><div class="me side-user"><a class="avatar" href="#/account" aria-label="Minha conta">${e(ini2(who))}</a><a class="who" href="#/account"><b>${e(who)}</b><small>${e(me.email || "")}</small></a><button type="button" data-act="logout" class="exit" title="Sair" aria-label="Sair">↪</button></div></aside><div class="workspace"><header class="top"><div class="leg_cabecalho"><h1>${title}</h1><p>${e(subOf(page, title))}</p></div><div class="head-actions">${actions}</div><div class="top-user"><span class="avatar">${e(ini2(who))}</span><span><b>${e(who)}</b><small>MWE Harmonize</small></span></div></header><main>${body}</main></div><nav class="tabbar" aria-label="Navegação principal">${NAV.map(tab).join("")}<a href="#/account">Conta</a></nav>`;
+  app.innerHTML = `<aside class="side"><a class="logo" href="#/overview"><img class="brand-logo" src="logo.jpg" width="150" height="120" alt="Logo MWE Harmonize"><span class="leg_mwe">MWE Harmonize</span><small>Gestão de Eventos Musicais</small></a><nav aria-label="Menu principal">${visibleNav.map(([k, l]) => `<a href="#/${k}" class="${k == page ? "on" : ""}"${k == page ? ' aria-current="page"' : ""}><span class="ni">${navIcon(k)}<b>${l}</b></span></a>`).join("")}${SOON.map((l) => `<span class="soon" title="Módulo de outro integrante"><span class="ni">${navIcon(l)}<b>${l}</b></span><small>em breve</small></span>`).join("")}</nav><a class="btn rose newbtn" href="#/event/new">Novo evento</a><div class="me side-user"><a class="avatar" href="#/account" aria-label="Minha conta">${e(ini2(who))}</a><a class="who" href="#/account"><b>${e(who)}</b><small>${e(me.email || "")}</small></a><button type="button" data-act="logout" class="exit" title="Sair" aria-label="Sair">↪</button></div></aside><div class="workspace"><header class="top"><div class="leg_cabecalho"><h1>${title}</h1><p>${e(subOf(page, title))}</p></div><div class="head-actions">${actions}</div><div class="top-user"><span class="avatar">${e(ini2(who))}</span><span><b>${e(who)}</b><small>MWE Harmonize</small></span></div></header><main>${body}</main></div><nav class="tabbar" aria-label="Navegação principal">${visibleNav.map(tab).join("")}<a href="#/account">Conta</a></nav>`;
 };
 const authCard = (inner, split) => {
   app.innerHTML = split
@@ -158,6 +232,7 @@ async function route() {
   } catch {
     me = null;
   }
+  if (!me && s[0] === "invite") return inviteView(q.get("token") || "");
   if (!me)
     return s[0] == "reset"
       ? resetView(q.get("token"))
@@ -172,6 +247,12 @@ async function route() {
       agenda: agendaView,
       events: eventsView,
       clients: clientsView,
+      finances: financesView,
+      reports: reportsView,
+      repertoire: repertoireView,
+      settings: settingsView,
+      accessibility: accessibilityView,
+      admin: adminView,
       event: () => eventRoute(s, q),
     }[s[0]] || overviewView;
   try {
@@ -196,7 +277,7 @@ function loginView(forgot) {
 }
 const resetView = (t) =>
   authCard(
-    `<h2>Nova senha</h2><form data-form="reset"><input type="hidden" name="token" value="${e(t)}">${field("Nova senha (mín. 8 caracteres)", "password", "", "password", "required minlength=8")}<div id="msg" class="errtxt"></div><button class="btn">Redefinir</button></form>`,
+    `<h2>Nova senha</h2><form data-form="reset"><input type="hidden" name="token" value="${e(t)}">${field("Nova senha (mín. 12 caracteres)", "password", "", "password", "required minlength=12 maxlength=1024")}<div id="msg" class="errtxt"></div><button class="btn">Redefinir</button></form>`,
   );
 
 // ---------- Visão geral e conta ----------
@@ -208,12 +289,18 @@ const ICONS = {
   events: "evento",
   clients: "cliente",
   team: "equipe",
+  admin: "equipe",
+  finances: "financeiro",
+  reports: "relatorio",
+  repertoire: "repertorio",
+  accessibility: "",
   Repertório: "repertorio",
   Financeiro: "financeiro",
   Relatórios: "relatorio",
 };
-const navIcon = (k) =>
-  ICONS[k]
+const navIcon = (k) => k === "accessibility"
+  ? `<svg class="mi" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.5" r="1.8"/><path d="m5 8 7 1.5L19 8M12 10v4.5M9 21l3-6.5 3 6.5"/></svg>`
+  : ICONS[k]
     ? `<img class="mi" src="icons/${ICONS[k]}.png" alt="" width="20" height="20">`
     : "";
 async function teamView() {
@@ -254,7 +341,189 @@ function accountView() {
   shell(
     "account",
     "Minha conta",
-    `<div class="row" style="align-items:start"><form class="card" data-form="profile"><h3>Dados de acesso</h3>${field("Nome", "name", me.name)}${field("E-mail", "email", me.email, "email")}<button class="btn">Salvar</button></form><form class="card" data-form="password"><h3>Alterar senha</h3>${field("Senha atual", "current", "", "password", 'autocomplete="current-password"')}${field("Nova senha (mín. 8 caracteres)", "password", "", "password", 'minlength=8 autocomplete="new-password"')}${field("Confirmar nova senha", "confirm", "", "password", 'autocomplete="new-password"')}<button class="btn">Alterar senha</button></form></div>`,
+    `<div class="row" style="align-items:start"><form class="card" data-form="profile"><h3>Dados de acesso</h3>${field("Nome", "name", me.name)}${field("E-mail", "email", me.email, "email")}<button class="btn">Salvar</button></form><form class="card" data-form="password"><h3>Alterar senha</h3>${field("Senha atual", "current", "", "password", 'autocomplete="current-password"')}${field("Nova senha (mín. 12 caracteres)", "password", "", "password", 'minlength=12 maxlength=1024 autocomplete="new-password"')}${field("Confirmar nova senha", "confirm", "", "password", 'autocomplete="new-password"')}<button class="btn">Alterar senha</button></form></div>`,
+  );
+}
+
+const permissionLabels = {
+  "users.view": "Listar colaboradores", "users.create": "Convidar colaboradores", "users.edit": "Editar colaboradores", "users.disable": "Ativar, desativar e bloquear", "users.delete": "Remover colaboradores",
+  "events.view": "Consultar eventos", "events.create": "Criar eventos", "events.edit": "Editar eventos", "events.delete": "Excluir eventos",
+  "clients.view": "Consultar clientes", "clients.create": "Criar clientes", "clients.edit": "Editar clientes", "clients.delete": "Excluir clientes",
+  "finance.view": "Consultar financeiro", "finance.create": "Criar lançamentos", "finance.edit": "Editar lançamentos", "finance.delete": "Excluir lançamentos",
+  "team.view": "Consultar equipe", "team.create": "Adicionar equipe", "team.edit": "Editar equipe", "team.delete": "Remover equipe",
+  "reports.view": "Consultar relatórios", "repertoire.view": "Consultar repertório", "repertoire.edit": "Editar repertório", "settings.view": "Consultar configurações", "settings.edit": "Editar configurações", "audit.view": "Consultar auditoria",
+};
+async function adminView() {
+  if (me.role !== "admin") { location.hash = "#/overview"; return; }
+  const data = await api("GET", "/admin/users");
+  const rows = data.users || [];
+  shell("admin", "Colaboradores", `<div class="row" style="align-items:start"><form class="card" data-form="invite"><h3>Convidar usuário</h3><p class="note">Enviaremos um convite com validade de 48 horas para a pessoa criar a própria senha.</p>${field("Nome completo *", "name", "", "text", "required maxlength=120")}${field("E-mail *", "email", "", "email", "required maxlength=254")}${sel("Perfil", "role", [["admin", "Administrador"], ["collaborator", "Colaborador"]], "collaborator")}<button class="btn">Enviar convite</button></form><section class="card"><div class="between"><div><h3>Usuários da organização</h3><p class="note">Acesso restrito aos dados desta organização.</p></div><button class="btn ghost" data-act="auditview">Ver auditoria</button></div><div class="scroll"><table class="tbl"><thead><tr><th>Colaborador</th><th>Perfil</th><th>Status</th><th>Último acesso</th><th>Ação</th></tr></thead><tbody>${rows.map((user) => `<tr><td><b>${e(user.name)}</b><br><small>${e(user.email)}</small></td><td>${user.role === "admin" ? "Administrador" : "Colaborador"}</td><td>${user.status === "active" ? "Ativo" : user.status === "blocked" ? "Bloqueado" : user.status === "pending" ? "Convite pendente" : "Desativado"}</td><td>${user.last_login_at ? new Date(user.last_login_at).toLocaleString("pt-BR") : "—"}</td><td>${Number(user.id) === Number(me.id) ? "—" : `<button class="link" data-act="edituser" data-u='${e(JSON.stringify(user))}'>Editar acesso</button>`}</td></tr>`).join("") || '<tr><td colspan="5" class="note">Nenhum usuário cadastrado.</td></tr>'}</tbody></table></div></section></div><section class="card"><h3>Convites pendentes</h3><div class="scroll"><table class="tbl"><thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Validade</th></tr></thead><tbody>${(data.invitations || []).map((invite) => `<tr><td>${e(invite.name)}</td><td>${e(invite.email)}</td><td>${invite.role === "admin" ? "Administrador" : "Colaborador"}</td><td>${new Date(invite.expires_at).toLocaleString("pt-BR")}</td></tr>`).join("") || '<tr><td colspan="4" class="note">Nenhum convite pendente.</td></tr>'}</tbody></table></div></section><section id="admin-audit" class="card" hidden aria-live="polite"></section><dialog id="dlg"></dialog>`, "");
+}
+function inviteView(token) {
+  if (!/^[a-f0-9]{64}$/.test(token)) return authCard(`<h2>Convite inválido</h2><p class="note">Este convite está inválido ou expirado. Solicite um novo ao administrador.</p>`);
+  authCard(`<small class="eyebrow">PRIMEIRO ACESSO</small><h2>Ative sua conta</h2><p class="note">Crie uma senha com pelo menos 12 caracteres.</p><form data-form="acceptInvite"><input type="hidden" name="token" value="${e(token)}">${field("Senha", "password", "", "password", "required minlength=12 maxlength=1024 autocomplete=new-password")}<div id="msg" class="errtxt" role="alert"></div><button class="btn wide">Ativar conta</button></form>`);
+}
+
+// ---------- Financeiro e relatórios ----------
+const metricCard = (label, value, tone = "") =>
+  `<article class="card stat ${tone}"><small>${e(label)}</small><h2>${e(value)}</h2></article>`;
+async function financesView() {
+  const qs = new URLSearchParams(Object.entries(F).filter(([, value]) => value));
+  const data = await api("GET", "/finances?" + qs);
+  const rows = data.items || [];
+  const kpi = data.kpi || {};
+  shell(
+    "finances",
+    "Financeiro",
+    `<div class="cards finance-kpis">${metricCard("Recebido", money(kpi.received))}${metricCard("A receber", money(kpi.to_receive))}${metricCard("Em atraso", money(kpi.overdue), "negative")}</div>
+      <div class="bar" style="margin-top:16px"><input data-o="F" data-k="q" placeholder="Buscar lançamento ou evento" value="${e(F.q)}">${sel("", "status", financeStatusOpts, F.status, 'data-o="F" data-k="status" aria-label="Filtrar por status financeiro"')}<input type="date" data-o="F" data-k="from" value="${e(F.from)}" aria-label="Vencimento a partir de"><input type="date" data-o="F" data-k="to" value="${e(F.to)}" aria-label="Vencimento até">${Object.values(F).some(Boolean) ? '<button class="btn ghost" data-act="clearfin">Limpar filtros</button>' : ""}</div>
+      <div class="card"><div class="between finance-title"><h3>Lançamentos financeiros</h3><span class="note">${rows.length} lançamento(s)</span></div><div class="scroll"><table class="tbl finance-table"><thead><tr><th>Descrição / Evento</th><th>Parcela</th><th>Vencimento</th><th>Valor</th><th>Status</th><th>Ações</th></tr></thead><tbody>${rows.map((x) => `<tr><td><b>${e(x.description)}</b><br><small>${e(x.event_name || "Sem evento vinculado")}${x.client_name ? " · " + e(x.client_name) : ""}</small></td><td>${e(x.installment || "—")}</td><td>${fmt(x.due_date)}${x.paid_date ? `<br><small>Recebido em ${fmt(x.paid_date)}</small>` : ""}</td><td><b>${money(x.amount)}</b></td><td>${badge(x.status)}</td><td class="nw"><button class="link" data-act="editfin" data-f='${e(JSON.stringify(x))}'>Editar</button> · <button class="link" data-act="delfin" data-id="${x.id}">Excluir</button></td></tr>`).join("") || '<tr><td colspan="6"><div class="empty note"><div><b>Nenhum lançamento encontrado</b>Adicione um recebimento ou valor a receber.</div></div></td></tr>'}</tbody></table></div></div><dialog id="dlg"></dialog>`,
+    '<button class="btn" data-act="editfin" data-f="{}">+ Novo lançamento</button>',
+  );
+}
+
+async function reportsView() {
+  const r = await api("GET", "/reports/kpis");
+  const statuses = r.events.by_status || [];
+  shell(
+    "reports",
+    "Relatórios e Indicadores",
+    `<section><h2 class="report-heading">Eventos</h2><div class="cards">${metricCard("Total de eventos", r.events.total)}${metricCard("Confirmados ou concluídos", r.events.confirmed)}${metricCard("Taxa de confirmação", `${r.events.rate}%`)}</div><div class="card report-status"><h3>Eventos por status</h3><div class="scroll"><table class="tbl"><thead><tr><th>Status</th><th>Quantidade</th></tr></thead><tbody>${statuses.map((x) => `<tr><td>${badge(x.status)}</td><td>${x.count}</td></tr>`).join("") || '<tr><td colspan="2" class="note">Ainda não há eventos cadastrados.</td></tr>'}</tbody></table></div></div></section>
+      <section><h2 class="report-heading">Financeiro</h2><div class="cards">${metricCard("Recebido", money(r.finances.received))}${metricCard("A receber", money(r.finances.to_receive))}${metricCard("Em atraso", money(r.finances.overdue), "negative")}</div></section>
+      <section><h2 class="report-heading">Exportação CSV</h2><div class="cards report-exports"><article class="card"><h3>Relatório de eventos</h3><p class="note">Eventos, clientes, datas, status e valores de contrato.</p><button class="btn ghost" data-act="export" data-type="events">Exportar eventos</button></article><article class="card"><h3>Relatório financeiro</h3><p class="note">Recebimentos, parcelas, vencimentos e status financeiros.</p><button class="btn ghost" data-act="export" data-type="financial">Exportar financeiro</button></article></div></section>`,
+  );
+}
+
+// ---------- Repertório completo ----------
+const REP_MOMENTS = [
+  ["entrada", "Entrada"],
+  ["assinaturas", "Assinaturas"],
+  ["saida", "Saída"],
+  ["coquetel", "Coquetel"],
+  ["outro", "Outro"],
+  ["recepcao", "Recepção"],
+  ["noiva", "Entrada da Noiva"],
+  ["noivo", "Entrada do Noivo"],
+  ["padrinhos", "Entrada dos Padrinhos"],
+  ["assinatura", "Assinatura"],
+];
+const momentName = (key) => REP_MOMENTS.find(([value]) => value === key)?.[1] || key;
+const repKey = (eventId, moment) => `${eventId}|${moment}`;
+function openRepSong(song = {}) {
+  const d = $("#dlg");
+  d.innerHTML = `<h3>${song.id ? "Editar" : "Adicionar"} música</h3><form data-form="repSong"><input type="hidden" name="id" value="${e(song.id || "")}">${sel("Evento *", "evento", (R.events || []).map((event) => [String(event.id), event.name]), song.evento || R.eventId)}${sel("Momento *", "momento", REP_MOMENTS, song.momento || "recepcao")}${field("Ordem *", "ordem", song.ordem || 1, "number", 'required min="1" step="1"')}${field("Música *", "music", song.music || "", "text", "required maxlength=180")}${field("Artista / performer", "art", song.art || "", "text", "maxlength=180")}${field("Compositor", "compo", song.compo || "", "text", "maxlength=180")}${field("Instrumentação", "instru", song.instru || "", "text", "maxlength=240")}<label>Observações<textarea name="obs" rows="3" maxlength="2000">${e(song.obs || "")}</textarea></label>${field("Link de referência", "link", song.link || "", "url", 'maxlength=2000 placeholder="https://..."')}<div class="acts"><button type="button" class="btn ghost" onclick="this.closest('dialog').close()">Cancelar</button><button class="btn">Salvar música</button></div></form>`;
+  d.showModal();
+}
+async function saveRepertoire(data) {
+  try {
+    const saved = await api("PUT", "/repertorios", {
+      musicas: data.musicas.filter((song) => !song.legacy),
+      duracoes: data.duracoes,
+      statusEventos: data.statusEventos,
+    });
+    R.data = saved;
+    toast("Repertório salvo.");
+    await route();
+    return true;
+  } catch (x) {
+    toast(errMsg(x), 1);
+    return false;
+  }
+}
+async function repertoireView() {
+  const [data, events, settings] = await Promise.all([
+    api("GET", "/repertorios"),
+    api("GET", "/events"),
+    api("GET", "/configuracoes"),
+  ]);
+  R.data = data;
+  R.events = events;
+  R.settings = settings;
+  if (!events.some((event) => String(event.id) === String(R.eventId)))
+    R.eventId = events.length ? String(events[0].id) : "";
+  const event = events.find((item) => String(item.id) === String(R.eventId));
+  const eventSongs = data.musicas.filter((song) => song.evento === String(R.eventId));
+  const query = R.q.trim().toLocaleLowerCase("pt-BR");
+  const groups = REP_MOMENTS.map(([moment]) => [
+    moment,
+    eventSongs.filter((song) => song.momento === moment &&
+      [momentName(moment), song.music, song.art, song.compo, song.instru, song.obs]
+        .join(" ").toLocaleLowerCase("pt-BR").includes(query)),
+  ]).filter(([, songs]) => songs.length);
+  const status = data.statusEventos[R.eventId] || "pendente";
+  const eventDate = event?.date ? fmt(event.date) : "";
+  const dateText = formatConfiguredDate(event?.date, R.settings?.formato) || eventDate;
+  const eventDetails = [dateText, event?.start_time, event?.venue].filter(Boolean).join(" · ");
+  const body = event
+    ? `<div class="rep-toolbar"><div class="rep-event-select">${sel("Evento", "eventId", events.map((x) => [String(x.id), x.name]), R.eventId, 'data-o="R" data-k="eventId"')}</div><div class="rep-event-meta"><span>${e(eventDetails || "Sem data ou local informados")}</span><span class="rep-approval ${status}">${status === "aprovado" ? "Aprovado" : "Pendente de aprovação"}</span><button class="btn ghost" data-act="editRepStatus">Alterar status</button></div></div>
+      <div class="bar rep-search"><input data-o="R" data-k="q" type="search" placeholder="Buscar música, artista ou momento" value="${e(R.q)}"><button class="btn" data-act="newRepSong">+ Adicionar música</button></div>
+      <div class="rep-groups">${groups.map(([moment, songs]) => {
+        const key = repKey(R.eventId, moment);
+        const duration = data.duracoes[key];
+        const ordered = [...songs].sort((a, b) => a.ordem - b.ordem);
+        return `<section class="card rep-group" data-moment="${e(moment)}"><header class="rep-group-head"><div><h2>${e(momentName(moment))}</h2><p class="note">${ordered.length} música(s)${duration ? ` · Aproximadamente ${duration} min` : ""}</p></div><button class="btn ghost" data-act="editRepDuration" data-moment="${e(moment)}">${duration ? "Editar duração" : "Definir duração"}</button></header><div class="rep-song-list">${ordered.map((song) => `<article class="rep-song"><div class="rep-song-order">${song.ordem}</div><div class="rep-song-info"><h3>${e(song.music)}</h3><p>${e(song.art)}${song.compo ? ` · ${e(song.compo)}` : ""}</p>${song.instru ? `<small>Instrumentação: ${e(song.instru)}</small>` : ""}${song.obs ? `<small>${e(song.obs)}</small>` : ""}${song.legacy ? '<span class="rep-legacy">Já cadastrado em Eventos · somente leitura aqui</span>' : ""}</div><div class="rep-song-actions">${song.link ? `<button class="btn ghost" data-act="playRepSong" data-song='${e(JSON.stringify(song))}'>Reproduzir</button>` : ""}${song.legacy ? `<a class="btn ghost" href="#/event/${e(song.evento)}/edit">Abrir evento</a>` : `<button class="btn ghost" data-act="editRepSong" data-id="${song.id}">Editar</button><button class="btn danger" data-act="deleteRepSong" data-id="${song.id}">Excluir</button>`}</div></article>`).join("")}</div></section>`;
+      }).join("") || `<div class="card empty note"><div><b>${query ? "Nenhuma música encontrada" : "Nenhuma música neste evento"}</b>${query ? "Altere a busca ou limpe o filtro." : "Adicione músicas para organizar o repertório por momento."}</div></div>`}</div>
+      <dialog id="dlg"></dialog><dialog id="rep-player"><button class="btn ghost" data-act="closeRepPlayer">Fechar</button><h2 id="rep-player-title"></h2><div id="rep-player-content"></div><p id="rep-player-message" class="note"></p><a id="rep-player-link" class="btn ghost" target="_blank" rel="noopener noreferrer">Abrir referência</a></dialog>`
+    : `<div class="card empty note"><div><b>Nenhum evento disponível</b>Cadastre um evento antes de organizar o repertório.</div></div>`;
+  shell("repertoire", "Repertório", body,
+    event ? `<span class="badge s-${status === "aprovado" ? "confirmado" : "pendente"}">${status === "aprovado" ? "Aprovado" : "Pendente de aprovação"}</span>` : "");
+}
+
+// ---------- Configurações da empresa ----------
+const CONFIG_DEFAULTS = {
+  nome: "", exibicao: "", email: me?.email || "", telefone: "", idioma: "pt-BR",
+  moeda: "BRL", formato: "dd/mm/aaaa", fuso: "America/Sao_Paulo",
+  novosEventos: true, vencimentos: true, escalas: false,
+};
+async function settingsView() {
+  const loaded = await api("GET", "/configuracoes");
+  const data = { ...CONFIG_DEFAULTS, ...loaded };
+  const checkbox = (name, title, desc) =>
+    `<label class="setting-toggle"><span><b>${title}</b><small>${desc}</small></span><input type="checkbox" name="${name}" ${data[name] ? "checked" : ""}></label>`;
+  shell(
+    "settings",
+    "Configurações",
+    `<section class="card settings-account"><div><small>Conta conectada</small><h2>${e(me.name || "Usuário")}</h2><p class="note">${e(me.email || "")}</p></div><span class="badge s-confirmado">Sessão ativa</span></section>
+      <form data-form="settings" class="settings-form"><section class="card"><h2>Perfil da empresa</h2><p class="note">Esses dados são independentes das credenciais de login.</p><div class="settings-grid">${field("Nome da empresa *", "nome", data.nome, "text", "required maxlength=120")}${field("Nome de exibição *", "exibicao", data.exibicao, "text", "required maxlength=120")}${field("E-mail corporativo *", "email", data.email, "email", "required maxlength=254")}${field("Telefone com DDD *", "telefone", data.telefone, "tel", 'required inputmode="numeric" maxlength=11 placeholder="11999999999"')}</div></section>
+      <section class="card"><h2>Preferências</h2><div class="settings-grid">${sel("Idioma", "idioma", [["pt-BR", "Português (Brasil)"]], data.idioma)}${sel("Moeda", "moeda", [["BRL", "BRL — Real brasileiro"], ["USD", "USD — Dólar americano"], ["EUR", "EUR — Euro"]], data.moeda)}${sel("Formato de data", "formato", [["dd/mm/aaaa", "dd/mm/aaaa"], ["mm/dd/aaaa", "mm/dd/aaaa"], ["aaaa-mm-dd", "aaaa-mm-dd"]], data.formato)}${sel("Fuso horário", "fuso", [["America/Sao_Paulo", "Brasília (UTC−3)"], ["America/Manaus", "Manaus (UTC−4)"], ["America/Rio_Branco", "Rio Branco (UTC−5)"], ["America/Noronha", "Fernando de Noronha (UTC−2)"]], data.fuso)}</div><p class="note">A moeda e o fuso são preferências e não convertem valores ou horários automaticamente.</p></section>
+      <section class="card"><h2>Notificações</h2><p class="note">Preferências para alertas dos módulos correspondentes.</p>${checkbox("novosEventos", "Novos eventos e propostas", "Avisos sobre novos cadastros e propostas.")}${checkbox("vencimentos", "Vencimentos financeiros", "Avisos sobre parcelas próximas ou em atraso.")}${checkbox("escalas", "Alterações de escala", "Avisos sobre equipe e disponibilidade.")}</section><div class="acts"><span id="settings-message" class="note" role="status"></span><button class="btn">Salvar configurações</button></div></form>`,
+  );
+}
+
+function syncA11yControls() {
+  document.querySelectorAll("[data-pref]").forEach((control) => {
+    control.setAttribute("aria-checked", String(!!a11yPreferences[control.dataset.pref]));
+  });
+  document.querySelectorAll('input[name="a11ySize"]').forEach((radio) => {
+    radio.checked = radio.value === a11yPreferences.tamanho;
+  });
+}
+function accessibilityView() {
+  const sizeOptions = [
+    ["1", "100%"],
+    ["1.25", "125%"],
+    ["1.5", "150%"],
+  ];
+  const toggle = (key, title, description) =>
+    `<div class="a11y-option"><div class="a11y-option-copy"><b id="a11y-label-${key}">${title}</b><small>${description}</small></div><button type="button" class="a11y-switch" role="switch" aria-checked="${a11yPreferences[key]}" aria-labelledby="a11y-label-${key}" data-act="toggleA11y" data-pref="${key}"></button></div>`;
+  shell(
+    "accessibility",
+    "Acessibilidade",
+    `<div class="a11y-layout"><aside class="card a11y-aside" aria-label="Informações de acessibilidade"><small class="eyebrow">PREFERÊNCIAS PESSOAIS</small><b>Privacidade</b><p>Estas preferências são aplicadas neste navegador e não alteram as configurações de outras pessoas.</p><span class="a11y-pill">Navegação por teclado ativa</span></aside><div class="a11y-content">
+      <section class="card a11y-intro"><span class="a11y-mark" aria-hidden="true">Aa</span><div><h2>Preferências inclusivas</h2><p>Ajustes pessoais para leitura, navegação e compreensão da interface.</p></div></section>
+      <section class="card a11y-section" aria-labelledby="a11y-reading"><h2 id="a11y-reading">Leitura e percepção</h2><p class="note">Ajustes visuais para facilitar a leitura sem remover informações.</p>
+        <div class="a11y-option"><div class="a11y-option-copy"><b id="a11y-label-size">Tamanho do texto</b><small>Escolha uma escala confortável para a interface.</small></div><fieldset class="a11y-segmented" role="radiogroup" aria-labelledby="a11y-label-size"><legend class="sr-only">Tamanho do texto</legend>${sizeOptions.map(([value, label]) => `<label><input type="radio" name="a11ySize" value="${value}" ${a11yPreferences.tamanho === value ? "checked" : ""}><span>${label}</span></label>`).join("")}</fieldset></div>
+        ${toggle("contraste", "Contraste reforçado", "Aumenta o contraste de textos, bordas e controles.")}
+        ${toggle("foco", "Foco sempre visível", "Destaca o elemento selecionado durante a navegação por teclado.")}
+      </section>
+      <section class="card a11y-section" aria-labelledby="a11y-interaction"><h2 id="a11y-interaction">Interação e movimento</h2><p class="note">Controle animações e mantenha mensagens claras.</p>
+        ${toggle("animacoes", "Reduzir animações", "Remove transições e movimentos que não sejam essenciais.")}
+        ${toggle("alertas", "Alertas visuais e por texto", "Mensagens também são anunciadas por leitores de tela e identificadas por texto.")}
+        <div class="a11y-option"><div class="a11y-option-copy"><b>Navegação por teclado</b><small>Use Tab e Shift + Tab para percorrer os controles.</small></div><span class="a11y-pill">Ativa</span></div>
+      </section>
+      <section class="card a11y-section a11y-reader" aria-labelledby="a11y-readers"><div><h2 id="a11y-readers">Leitores de tela</h2><p class="note">Controles com rótulos descritivos e estados anunciados. A interface mantém indicadores além da cor.</p></div><span class="a11y-pill">Preparado</span></section>
+      <div class="a11y-actions"><button type="button" class="btn ghost" data-act="restoreA11y">Restaurar padrão</button><span id="a11y-status" class="note" role="status" aria-live="polite"></span><button type="button" class="btn" data-act="saveA11y">Salvar preferências</button></div>
+    </div></div><button type="button" class="a11y-fab" data-act="a11yShortcut" aria-label="Ir para as preferências de acessibilidade" title="Acessibilidade"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="4.5" r="1.8"/><path d="m5 8 7 1.5L19 8M12 10v4.5M9 21l3-6.5 3 6.5"/></svg></button>`,
   );
 }
 
@@ -633,6 +902,41 @@ async function clientsView() {
 
 // ---------- Eventos de UI ----------
 const A = {
+  toggleA11y: (t) => {
+    const key = t.dataset.pref;
+    if (!Object.hasOwn(A11Y_DEFAULTS, key)) return;
+    a11yPreferences[key] = !a11yPreferences[key];
+    t.setAttribute("aria-checked", String(a11yPreferences[key]));
+    applyA11yPreferences();
+  },
+  restoreA11y: () => {
+    a11yPreferences = { ...A11Y_DEFAULTS };
+    syncA11yControls();
+    applyA11yPreferences();
+    const status = $("#a11y-status");
+    if (status) status.textContent = "Padrão restaurado. Salve para manter esta escolha.";
+    toast("Padrão restaurado. Salve para manter esta escolha.");
+  },
+  saveA11y: () => {
+    try {
+      localStorage.setItem(A11Y_STORAGE_KEY, JSON.stringify(a11yPreferences));
+      const status = $("#a11y-status");
+      if (status) status.textContent = "Preferências salvas neste navegador.";
+      toast("Preferências de acessibilidade salvas.");
+    } catch {
+      const status = $("#a11y-status");
+      if (status) status.textContent = "Não foi possível salvar no navegador.";
+      toast("Não foi possível salvar. Verifique as permissões do navegador.", 1);
+    }
+  },
+  a11yShortcut: () => {
+    const target = $(".a11y-intro");
+    target?.scrollIntoView?.({
+      behavior: a11yPreferences.animacoes ? "auto" : "smooth",
+      block: "start",
+    });
+    $('input[name="a11ySize"]:checked')?.focus();
+  },
   editmember: (t) => {
     const m = JSON.parse(t.dataset.c),
       d = $("#dlg");
@@ -662,6 +966,97 @@ const A = {
       toast(errMsg(x), 1);
     }
   },
+  editfin: async (t) => {
+    const item = JSON.parse(t.dataset.f || "{}"),
+      events = await api("GET", "/events"),
+      d = $("#dlg");
+    d.innerHTML = `<h3>${item.id ? "Editar" : "Novo"} lançamento</h3><form data-form="finance"><input type="hidden" name="id" value="${item.id || ""}">${field("Descrição *", "description", item.description || "", "text", "required maxlength=180")}<div class="row">${field("Valor (R$) *", "amount", item.amount ?? "", "number", 'required min="0.01" step="0.01"')}${sel("Evento vinculado", "event_id", [["", "Sem evento"], ...events.map((x) => [x.id, `${x.name}${x.date ? " · " + fmt(x.date) : ""}`])], item.event_id ?? "")}</div><div class="row">${field("Vencimento *", "due_date", item.due_date || "", "date", "required")}${field("Parcela", "installment", item.installment || "", "text", 'placeholder="Ex.: 2 de 4" maxlength=60')}</div><div class="row">${sel("Status", "status", Object.entries(FIN_ST), item.status || "pendente")}${field("Data do recebimento", "paid_date", item.paid_date || "", "date")}</div><p class="note">Para marcar como recebido, informe a data do recebimento.</p><div class="acts"><button type="button" class="btn ghost" onclick="this.closest('dialog').close()">Cancelar</button><button class="btn">Salvar lançamento</button></div></form>`;
+    d.showModal();
+  },
+  delfin: async (t) => {
+    if (!confirm("Excluir este lançamento financeiro?")) return;
+    try {
+      await api("DELETE", "/finances/" + t.dataset.id);
+      toast("Lançamento excluído.");
+      route();
+    } catch (x) {
+      toast(errMsg(x), 1);
+    }
+  },
+  edituser: (t) => {
+    const user = JSON.parse(t.dataset.u || "{}"), d = $("#dlg"), selected = new Set(user.permissions || []);
+    const groups = ["users", "events", "clients", "finance", "team", "reports", "repertoire", "settings", "audit"];
+    d.innerHTML = `<h3>Permissões de ${e(user.name)}</h3><form data-form="adminUser"><input type="hidden" name="id" value="${e(user.id)}">${field("Nome", "name", user.name, "text", "required maxlength=120")}${field("E-mail", "email", user.email, "email", "required maxlength=254")}${sel("Perfil", "role", [["collaborator", "Colaborador"], ["admin", "Administrador"]], user.role)}${sel("Status", "status", [["active", "Ativo"], ["disabled", "Desativado"], ["blocked", "Bloqueado"]], user.status)}<fieldset><legend>Permissões do colaborador</legend><p class="note">Permissões desmarcadas ficam negadas, mesmo quando fazem parte do perfil padrão.</p>${groups.map((group) => `<div class="permission-group"><b>${e(group === "users" ? "Colaboradores" : group === "team" ? "Equipe" : group === "finance" ? "Financeiro" : group === "audit" ? "Auditoria" : group === "reports" ? "Relatórios" : group === "repertoire" ? "Repertório" : group === "settings" ? "Configurações" : group === "clients" ? "Clientes" : "Eventos")}</b><div class="row">${Object.keys(permissionLabels).filter((permission) => permission.startsWith(group + ".")).map((permission) => `<label class="chk"><input type="checkbox" name="permission" value="${e(permission)}" ${selected.has(permission) ? "checked" : ""}> ${e(permissionLabels[permission])}</label>`).join("")}</div></div>`).join("")}</fieldset><div class="acts"><button type="button" class="btn ghost" onclick="this.closest('dialog').close()">Cancelar</button><button class="btn">Salvar acesso</button></div></form>`;
+    d.showModal();
+  },
+  auditview: async () => {
+    try {
+      const rows = await api("GET", "/admin/audit"), target = $("#admin-audit");
+      target.hidden = false;
+      target.innerHTML = `<h3>Auditoria da organização</h3><div class="scroll"><table class="tbl"><thead><tr><th>Data</th><th>Usuário</th><th>Ação</th><th>Registro</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${new Date(row.created_at).toLocaleString("pt-BR")}</td><td>${e(row.actor_user_id)}</td><td>${e(row.action)}</td><td>${e(row.target_type)} ${e(row.target_id || "")}</td></tr>`).join("") || '<tr><td colspan="4">Nenhuma ação registrada.</td></tr>'}</tbody></table></div>`;
+    } catch (x) { toast(errMsg(x), 1); }
+  },
+  export: async (t) => {
+    try {
+      const r = await fetch(`/api/reports/${encodeURIComponent(t.dataset.type)}/export`);
+      if (!r.ok) throw await r.json().catch(() => ({ error: "Falha ao exportar relatório." }));
+      const url = URL.createObjectURL(await r.blob()),
+        a = document.createElement("a");
+      a.href = url;
+      a.download = `relatorio_${t.dataset.type}.csv`;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (x) {
+      toast(errMsg(x), 1);
+    }
+  },
+
+  newRepSong: () => openRepSong({ evento: R.eventId, momento: "recepcao", ordem: 1 }),
+  editRepSong: (t) => {
+    const song = R.data.musicas.find((item) => String(item.id) === String(t.dataset.id));
+    if (song && !song.legacy) openRepSong(song);
+  },
+  deleteRepSong: async (t) => {
+    if (!confirm("Excluir esta música do repertório?")) return;
+    await saveRepertoire({ ...R.data, musicas: R.data.musicas.filter((song) => song.legacy || String(song.id) !== String(t.dataset.id)) });
+  },
+  editRepDuration: (t) => {
+    const moment = t.dataset.moment, key = repKey(R.eventId, moment), d = $("#dlg");
+    d.innerHTML = `<h3>Duração de ${e(momentName(moment))}</h3><form data-form="repDuration"><input type="hidden" name="moment" value="${e(moment)}">${field("Duração aproximada em minutos *", "minutes", R.data.duracoes[key] || "", "number", 'required min="1" max="1440" step="1"') }<div class="acts"><button type="button" class="btn ghost" onclick="this.closest('dialog').close()">Cancelar</button><button class="btn">Salvar</button></div></form>`;
+    d.showModal();
+  },
+  editRepStatus: () => {
+    const d = $("#dlg"), status = R.data.statusEventos[R.eventId] || "pendente";
+    d.innerHTML = `<h3>Aprovação do repertório</h3><form data-form="repStatus"><div class="field"><label>Status</label><select name="status"><option value="pendente" ${status === "pendente" ? "selected" : ""}>Pendente</option><option value="aprovado" ${status === "aprovado" ? "selected" : ""}>Aprovado</option></select></div><div class="acts"><button type="button" class="btn ghost" onclick="this.closest('dialog').close()">Cancelar</button><button class="btn">Salvar</button></div></form>`;
+    d.showModal();
+  },
+  playRepSong: (t) => {
+    const song = JSON.parse(t.dataset.song || "{}");
+    let url;
+    try { url = new URL(song.link); } catch { return toast("Referência inválida.", 1); }
+    if (!["http:", "https:"].includes(url.protocol)) return toast("Referência inválida.", 1);
+    const d = $("#rep-player"), content = $("#rep-player-content"), link = $("#rep-player-link");
+    $("#rep-player-title").textContent = song.music || "Referência";
+    content.replaceChildren();
+    $("#rep-player-message").textContent = "A referência será aberta em uma nova aba quando o formato não puder ser reproduzido aqui.";
+    link.href = url.href;
+    const audio = /\.(mp3|wav|ogg|m4a)(\?.*)?$/i.test(url.pathname + url.search);
+    const yt = url.hostname === "youtu.be" || url.hostname.endsWith("youtube.com");
+    if (audio) {
+      const player = document.createElement("audio"); player.controls = true; player.src = url.href; content.append(player);
+      $("#rep-player-message").textContent = "";
+    } else if (yt) {
+      const id = url.hostname === "youtu.be" ? url.pathname.slice(1) : url.searchParams.get("v");
+      if (id && /^[\w-]{6,20}$/.test(id)) {
+        const frame = document.createElement("iframe"); frame.title = "Player de referência"; frame.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}`; frame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"; frame.allowFullscreen = true; content.append(frame);
+        $("#rep-player-message").textContent = "";
+      }
+    }
+    d.showModal();
+  },
+  closeRepPlayer: () => $("#rep-player").close(),
 
   addrep: (t) => {
     readForm(t.closest("form"));
@@ -679,6 +1074,10 @@ const A = {
   },
   cleare: () => {
     Object.assign(E, { q: "", status: "", from: "", to: "", page: 1 });
+    route();
+  },
+  clearfin: () => {
+    Object.assign(F, { q: "", status: "", from: "", to: "" });
     route();
   },
   page: (t) => {
@@ -749,6 +1148,93 @@ const A = {
   },
 };
 const FORMS = {
+  invite: async (f) => {
+    const data = Object.fromEntries(new FormData(f));
+    try {
+      await api("POST", "/admin/invitations", data);
+      toast("Convite enviado.");
+      f.reset();
+      await adminView();
+    } catch (x) { toast(errMsg(x), 1); }
+  },
+  acceptInvite: async (f) => {
+    try {
+      await api("POST", "/invitations/accept", Object.fromEntries(new FormData(f)));
+      toast("Conta ativada. Entre com seu e-mail e senha.");
+      location.hash = "#/login";
+      route();
+    } catch (x) {
+      $("#msg").textContent = errMsg(x);
+    }
+  },
+  adminUser: async (f) => {
+    const data = Object.fromEntries(new FormData(f));
+    data.permissions = [...f.querySelectorAll('input[name="permission"]:checked')].map((input) => input.value);
+    try {
+      await api("PATCH", "/admin/users/" + encodeURIComponent(data.id), data);
+      $("#dlg")?.close();
+      toast("Acesso do colaborador atualizado.");
+      await adminView();
+    } catch (x) { toast(errMsg(x), 1); }
+  },
+  repSong: async (f) => {
+    const form = Object.fromEntries(new FormData(f));
+    const id = form.id;
+    const song = {
+      id: id ? Number(id) : null,
+      evento: form.evento,
+      momento: form.momento,
+      ordem: Number(form.ordem),
+      music: form.music.trim(),
+      art: form.art.trim(),
+      compo: form.compo.trim(),
+      instru: form.instru.trim(),
+      obs: form.obs.trim(),
+      link: form.link.trim(),
+      legacy: false,
+    };
+    const songs = R.data.musicas.filter((item) => item.legacy || String(item.id) !== String(id));
+    try {
+      await saveRepertoire({ ...R.data, musicas: [...songs, song] });
+      $("#dlg")?.close();
+    } catch (x) { toast(errMsg(x), 1); }
+  },
+  repDuration: async (f) => {
+    const form = Object.fromEntries(new FormData(f));
+    const duracoes = { ...R.data.duracoes, [repKey(R.eventId, form.moment)]: Number(form.minutes) };
+    if (!Number.isInteger(Number(form.minutes)) || Number(form.minutes) < 1) return toast("Informe uma duração válida.", 1);
+    await saveRepertoire({ ...R.data, duracoes });
+    $("#dlg")?.close();
+  },
+  repStatus: async (f) => {
+    const { status } = Object.fromEntries(new FormData(f));
+    await saveRepertoire({ ...R.data, statusEventos: { ...R.data.statusEventos, [R.eventId]: status } });
+    $("#dlg")?.close();
+  },
+  settings: async (f) => {
+    const form = Object.fromEntries(new FormData(f));
+    for (const key of ["novosEventos", "vencimentos", "escalas"]) form[key] = f.elements.namedItem(key).checked;
+    try {
+      await api("PUT", "/configuracoes", form);
+      const status = $("#settings-message");
+      if (status) status.textContent = "Configurações salvas.";
+      toast("Configurações salvas.");
+    } catch (x) { toast(errMsg(x), 1); }
+  },
+  finance: async (f) => {
+    const d = Object.fromEntries(new FormData(f)),
+      id = d.id;
+    d.amount = Number(String(d.amount).replace(",", "."));
+    d.event_id = d.event_id || null;
+    d.paid_date = d.paid_date || null;
+    try {
+      await api(id ? "PUT" : "POST", "/finances" + (id ? "/" + id : ""), d);
+      toast("Lançamento salvo.");
+      route();
+    } catch (x) {
+      toast(errMsg(x), 1);
+    }
+  },
   member: async (f) => {
     const d = Object.fromEntries(new FormData(f));
     try {
@@ -794,12 +1280,16 @@ const FORMS = {
     }
   },
   forgot: async (f) => {
-    const r = await api(
-      "POST",
-      "/auth/forgot",
-      Object.fromEntries(new FormData(f)),
-    );
-    $("#msg").textContent = r.message;
+    try {
+      const r = await api(
+        "POST",
+        "/auth/forgot",
+        Object.fromEntries(new FormData(f)),
+      );
+      $("#msg").textContent = r.message;
+    } catch (x) {
+      $("#msg").textContent = errMsg(x);
+    }
   },
   reset: async (f) => {
     try {
@@ -859,6 +1349,12 @@ document.addEventListener("submit", (ev) => {
 });
 document.addEventListener("change", async (ev) => {
   const t = ev.target;
+  if (t.name === "a11ySize" && t.checked) {
+    a11yPreferences.tamanho = ["1", "1.25", "1.5"].includes(t.value)
+      ? t.value
+      : "1";
+    applyA11yPreferences();
+  }
   if (t.dataset.o) {
     O[t.dataset.o][t.dataset.k] = t.value;
     E.page = 1;
