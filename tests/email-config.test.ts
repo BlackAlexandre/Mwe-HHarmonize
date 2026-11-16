@@ -1,15 +1,12 @@
-import { test, before, after } from "node:test";
+import { test as nodeTest, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import { logEmailConfiguration } from "../email-service.js";
+import { testDatabaseConfigured, prepareTestDatabase, queryTestDatabase, cleanTestDatabase } from "./postgres-test.js";
 
 const port = 3922;
 const base = `http://localhost:${port}`;
-const dbFile = join(tmpdir(), "h-email-unconfigured.db");
+const databaseTest = (name: string, fn: (...args: any[]) => any) => nodeTest(name, { skip: !testDatabaseConfigured }, fn as any);
 let server: ReturnType<typeof spawn>;
 
 const request = async (method: string, path: string, body?: unknown, cookie = "") => {
@@ -22,8 +19,9 @@ const request = async (method: string, path: string, body?: unknown, cookie = ""
 };
 
 before(async () => {
-  rmSync(dbFile, { force: true });
-  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(port), DB_FILE: dbFile, ADMIN_EMAIL: "email-admin@test.com", ADMIN_PASSWORD: "email-admin-password-1" };
+  if (!testDatabaseConfigured) return;
+  await prepareTestDatabase();
+  const env: NodeJS.ProcessEnv = { ...process.env, PORT: String(port), DATABASE_URL: process.env.MWE_TEST_DATABASE_URL, ADMIN_EMAIL: "email-admin@test.com", ADMIN_PASSWORD: "email-admin-password-1" };
   delete env.BREVO_API_KEY;
   delete env.EMAIL_FROM;
   delete env.APP_URL;
@@ -40,14 +38,14 @@ before(async () => {
 });
 
 after(async () => {
-  if (server.exitCode === null) {
+  if (server?.exitCode === null) {
     server.kill();
     await new Promise<void>((resolve) => server.once("exit", () => resolve()));
   }
-  rmSync(dbFile, { force: true });
+  if (testDatabaseConfigured) await cleanTestDatabase();
 });
 
-test("sem configuração Brevo, recuperação e convite informam indisponibilidade sem criar token", async () => {
+databaseTest("sem configuração Brevo, recuperação e convite informam indisponibilidade sem criar token", async () => {
   const known = await request("POST", "/api/auth/forgot", { email: "email-admin@test.com" });
   const unknown = await request("POST", "/api/auth/forgot", { email: "ausente@test.com" });
   assert.equal(known.status, 503);
@@ -60,13 +58,11 @@ test("sem configuração Brevo, recuperação e convite informam indisponibilida
   assert.equal(invitation.status, 503);
   assert.equal(JSON.stringify(invitation.body).includes("BREVO_API_KEY"), false);
 
-  const db = new DatabaseSync(dbFile);
-  assert.equal((db.prepare("SELECT COUNT(*) n FROM resets").get() as any).n, 0);
-  assert.equal((db.prepare("SELECT COUNT(*) n FROM invitations").get() as any).n, 0);
-  db.close();
+  assert.equal(Number((await queryTestDatabase("SELECT COUNT(*)::int n FROM resets")).rows[0].n), 0);
+  assert.equal(Number((await queryTestDatabase("SELECT COUNT(*)::int n FROM invitations")).rows[0].n), 0);
 });
 
-test("diagnóstico de inicialização identifica APP_URL HTTP em produção sem revelar valores", () => {
+nodeTest("diagnóstico de inicialização identifica APP_URL HTTP em produção sem revelar valores", () => {
   const keys = ["BREVO_API_KEY", "EMAIL_FROM", "APP_URL", "NODE_ENV"] as const;
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   const output: string[] = [];

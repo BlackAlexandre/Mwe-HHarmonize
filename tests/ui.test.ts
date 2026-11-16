@@ -1,12 +1,13 @@
-import { test, before, after } from "node:test";
+import { test as nodeTest, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
+import { testDatabaseConfigured, prepareTestDatabase, cleanTestDatabase } from "./postgres-test.js";
+const test = (name: string, fn: (...args: any[]) => any) => nodeTest(name, { skip: !testDatabaseConfigured }, fn as any);
 
 const P = 3919,
-  B = `http://localhost:${P}`,
-  DB = "/tmp/h-ui.db";
+  B = `http://localhost:${P}`;
 let srv: any,
   dom: JSDOM,
   jar = "";
@@ -48,12 +49,13 @@ const now = new Date(),
   ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
 before(async () => {
-  rmSync(DB, { force: true });
+  if (!testDatabaseConfigured) return;
+  await prepareTestDatabase();
   srv = spawn(process.execPath, ["--import", "tsx", "server.ts"], {
     env: {
       ...process.env,
       PORT: String(P),
-      DB_FILE: DB,
+      DATABASE_URL: process.env.MWE_TEST_DATABASE_URL,
       ADMIN_EMAIL: "ui@t.com",
       ADMIN_PASSWORD: "senha-forte-1",
     },
@@ -88,7 +90,10 @@ before(async () => {
     },
   );
 });
-after(() => srv.kill());
+after(async () => {
+  if (srv && srv.exitCode === null) await new Promise<void>((resolve) => { srv.once("exit", () => resolve()); srv.kill(); });
+  if (testDatabaseConfigured) await cleanTestDatabase();
+});
 
 test("login em duas colunas, erro de credencial e entrada", async () => {
   await until(() => $("form[data-form=login]"), "login");

@@ -1,12 +1,12 @@
-import { test, before, after } from "node:test";
+import { test as nodeTest, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { createHash, scryptSync } from "node:crypto";
+import { testDatabaseConfigured, prepareTestDatabase, queryTestDatabase, cleanTestDatabase } from "./postgres-test.js";
+const test = (name: string, fn: (...args: any[]) => any) => nodeTest(name, { skip: !testDatabaseConfigured }, fn as any);
 const P = 3917,
   B = `http://localhost:${P}`,
-  DB = "/tmp/h-test.db",
   EMAIL_CAPTURE = "/tmp/h-brevo-capture.jsonl",
   EMAIL_FAIL = "/tmp/h-brevo-fail";
 const mails = () => existsSync(EMAIL_CAPTURE)
@@ -26,14 +26,15 @@ const call = async (m: string, u: string, b?: any, c = ck) => {
   return { s: r.status, j: await r.json(), h: s };
 };
 before(async () => {
-  rmSync(DB, { force: true });
+  if (!testDatabaseConfigured) return;
+  await prepareTestDatabase();
   rmSync(EMAIL_CAPTURE, { force: true });
   rmSync(EMAIL_FAIL, { force: true });
   srv = spawn(process.execPath, ["--import", "tsx", "--import", "./tests/mock-brevo.ts", "server.ts"], {
     env: {
       ...process.env,
       PORT: String(P),
-      DB_FILE: DB,
+      DATABASE_URL: process.env.MWE_TEST_DATABASE_URL,
       ADMIN_EMAIL: "a@t.com",
       ADMIN_PASSWORD: "senha-forte-1",
       NODE_ENV: "test",
@@ -56,8 +57,9 @@ before(async () => {
     }
   }
 });
-after(() => {
-  srv.kill();
+after(async () => {
+  if (srv && srv.exitCode === null) await new Promise<void>((resolve) => { srv.once("exit", () => resolve()); srv.kill(); });
+  if (testDatabaseConfigured) await cleanTestDatabase();
 });
 
 test("rotas privadas exigem login", async () => {
@@ -117,16 +119,12 @@ test("segurança transversal: origem, limitação de tentativas, headers e audit
   for (let i = 0; i < 10; i++)
     assert.equal((await call("POST", "/api/auth/login", { email: "rate-limit@example.test", password: "incorreta" })).s, 401);
   assert.equal((await call("POST", "/api/auth/login", { email: "rate-limit@example.test", password: "incorreta" })).s, 429);
-  const raw = new DatabaseSync(DB);
-  const audit = raw.prepare("SELECT action,target_type,target_id FROM security_audit ORDER BY id").all() as any[];
-  raw.close();
+  const audit = (await queryTestDatabase("SELECT action,target_type,target_id FROM security_audit ORDER BY id")).rows;
   assert.ok(audit.some((row) => row.action === "login.success"));
   assert.equal(JSON.stringify(audit).includes("a@t.com"), false);
   assert.equal(JSON.stringify(audit).includes("senha-forte-1"), false);
   const sessionToken = ck.split("=")[1];
-  const sessions = new DatabaseSync(DB);
-  sessions.prepare("UPDATE sessions SET expires=? WHERE token=?").run(Date.now() - 1, createHash("sha256").update(sessionToken).digest("hex"));
-  sessions.close();
+  await queryTestDatabase("UPDATE sessions SET expires=? WHERE token=?", Date.now() - 1, createHash("sha256").update(sessionToken).digest("hex"));
   assert.equal((await call("GET", "/api/auth/me")).s, 401, "sessão expirada é rejeitada");
   assert.equal((await call("POST", "/api/auth/login", { email: "a@t.com", password: "senha-forte-1" })).s, 200);
 });
@@ -235,11 +233,10 @@ test("repertório e configurações: CRUD, validação, preservação e comparti
   assert.equal(settings.s, 200);
   assert.equal((await call("GET", "/api/auth/me")).j.email, "a@t.com", "e-mail corporativo não altera login");
   const salt = "second-account-salt";
-  const raw = new DatabaseSync(DB);
   const otherEmail = "isolamento@t.com";
-  raw.prepare("INSERT INTO users(email,name,hash) VALUES(?,?,?)").run(otherEmail, "Outra conta", `${salt}:${scryptSync("senha-forte-2", salt, 64).toString("hex")}`);
-  raw.prepare("INSERT INTO organization_members(user_id,organization_id,role,status) SELECT id,organization_id,'collaborator','active' FROM users CROSS JOIN organization_members WHERE users.email=? AND organization_members.user_id=1").run(otherEmail);
-  raw.close();
+  const other = await queryTestDatabase("INSERT INTO users(email,name,hash) VALUES(?,?,?) RETURNING id", otherEmail, "Outra conta", `${salt}:${scryptSync("senha-forte-2", salt, 64).toString("hex")}`);
+  const org = await queryTestDatabase("SELECT organization_id FROM organization_members WHERE user_id=1");
+  await queryTestDatabase("INSERT INTO organization_members(user_id,organization_id,role,status) VALUES(?,?,'collaborator','active')", other.rows[0].id, org.rows[0].organization_id);
   const second = await call("POST", "/api/auth/login", { email: otherEmail, password: "senha-forte-2" });
   assert.equal(second.s, 200);
   const secondCookie = second.h!.split(";")[0];
@@ -271,9 +268,7 @@ test("recuperação de acesso e logout", async () => {
   const rejected = await call("POST", "/api/auth/forgot", { email: "a@t.com" }, "");
   assert.equal(rejected.s, 200);
   assert.deepEqual(rejected.j, unknown.j, "falha do provedor não revela se o endereço existe");
-  let raw = new DatabaseSync(DB);
-  assert.equal((raw.prepare("SELECT COUNT(*) n FROM resets").get() as any).n, 0, "remove token não enviado");
-  raw.close();
+  assert.equal((await queryTestDatabase("SELECT COUNT(*)::int n FROM resets")).rows[0].n, 0, "remove token não enviado");
   rmSync(EMAIL_FAIL, { force: true });
 
   const f = await call("POST", "/api/auth/forgot", { email: "a@t.com" }, "");
@@ -288,11 +283,8 @@ test("recuperação de acesso e logout", async () => {
   assert.equal(logs.includes(token), false, "token de recuperação não aparece nos logs");
   assert.equal(logs.includes("mock-brevo-key-for-tests"), false, "chave da Brevo não aparece nos logs");
   const sha = (t: string) => createHash("sha256").update(t).digest("hex");
-  raw = new DatabaseSync(DB);
-  assert.equal((raw.prepare("SELECT token FROM resets WHERE user_id=1").get() as any).token, sha(token), "banco armazena apenas o hash");
-  raw
-    .prepare("INSERT INTO resets VALUES(?,?,?)")
-    .run(sha("expirado"), 1, Date.now() - 1000);
+  assert.equal((await queryTestDatabase("SELECT token FROM resets WHERE user_id=1")).rows[0].token, sha(token), "banco armazena apenas o hash");
+  await queryTestDatabase("INSERT INTO resets VALUES(?,?,?)", sha("expirado"), 1, Date.now() - 1000);
   assert.equal(
     (
       await call(
@@ -317,7 +309,6 @@ test("recuperação de acesso e logout", async () => {
     400,
     "token inválido",
   );
-  raw.close();
   assert.equal(
     (await call("POST", "/api/auth/reset", { token, password: "curta" }, "")).s,
     400,
@@ -378,11 +369,7 @@ test("minha conta: dados, e-mail duplicado e senha", async () => {
     email: "a@t.com",
     password: "nova-senha-2",
   });
-  const raw = new DatabaseSync(DB);
-  raw
-    .prepare("INSERT INTO users(email,name,hash) VALUES(?,?,?)")
-    .run("b@t.com", "B", "x:00");
-  raw.close();
+  await queryTestDatabase("INSERT INTO users(email,name,hash) VALUES(?,?,?)", "b@t.com", "B", "x:00");
   assert.equal(
     (await call("PUT", "/api/account", { name: "", email: "x" })).s,
     422,
@@ -541,14 +528,11 @@ test("evento completo: operacional, repertório por momento, status e vínculo",
   );
   assert.equal(cl.ev_status, "preparacao");
   assert.equal((await call("DELETE", "/api/events/" + r.j.id)).s, 200);
-  const raw = new DatabaseSync(DB);
-  raw.exec("PRAGMA busy_timeout=5000");
   assert.equal(
-    (raw.prepare("SELECT COUNT(*) n FROM repertoire").get() as any).n,
+    Number((await queryTestDatabase("SELECT COUNT(*)::int n FROM repertoire")).rows[0].n),
     0,
     "repertório removido em cascata",
   );
-  raw.close();
 });
 
 test("manter conectado: cookie persistente só quando marcado; logout encerra a sessão", async () => {
@@ -744,9 +728,7 @@ test("colaboradores: convite, ativação, RBAC granular e revogação de sessão
   assert.equal(invited.j.role, "collaborator");
   assert.equal(invited.j.token, undefined, "token não é devolvido pela API");
   assert.equal((await call("GET", "/api/admin/users")).j.invitations.some((item: any) => item.email === "rbac@t.com"), true);
-  const inviteRow = new DatabaseSync(DB);
-  assert.equal((inviteRow.prepare("SELECT target_role FROM invitations WHERE email='rbac@t.com'").get() as any).target_role, "collaborator");
-  inviteRow.close();
+  assert.equal((await queryTestDatabase("SELECT target_role FROM invitations WHERE email=?", "rbac@t.com")).rows[0].target_role, "collaborator");
   const inviteMail = mails().at(-1);
   assert.equal(mails().length, emailCountBeforeInvite + 1, "convite chama a API da Brevo");
   assert.deepEqual(inviteMail.sender, { name: "MWE Harmonize", email: "no-reply@test.local" });
@@ -757,19 +739,14 @@ test("colaboradores: convite, ativação, RBAC granular e revogação de sessão
   assert.equal(JSON.stringify(invited.j).includes("mock-brevo-key-for-tests"), false);
   assert.equal(logs.includes(token), false, "token não aparece nos logs");
   const expiredToken = "b".repeat(64);
-  const expiredInsert = new DatabaseSync(DB);
-  expiredInsert.prepare("INSERT INTO invitations(organization_id,email,name,role,target_role,token_hash,expires_at,created_by,created_at) VALUES(1,?,'Expirado','collaborator','collaborator',?,?,1,?)")
-    .run("expirado@t.com", createHash("sha256").update(expiredToken).digest("hex"), Date.now() - 1000, Date.now());
-  expiredInsert.close();
+  await queryTestDatabase("INSERT INTO invitations(organization_id,email,name,role,target_role,token_hash,expires_at,created_by,created_at) VALUES(1,?,'Expirado','collaborator','collaborator',?,?,1,?)", "expirado@t.com", createHash("sha256").update(expiredToken).digest("hex"), Date.now() - 1000, Date.now());
   assert.equal((await call("POST", "/api/invitations/accept", { token: expiredToken, password: "senha-expirada-1" }, "")).s, 400, "convite expirado não pode ser aceito");
   assert.equal((await call("POST", "/api/invitations/accept", { token, password: "senha-colaborador-1" }, "")).s, 200);
   assert.equal((await call("POST", "/api/invitations/accept", { token, password: "senha-colaborador-2" }, "")).s, 400, "convite é de uso único");
-  const acceptedRow = new DatabaseSync(DB);
-  const collaboratorId = Number((acceptedRow.prepare("SELECT id FROM users WHERE email='rbac@t.com'").get() as any).id);
-  assert.equal((acceptedRow.prepare("SELECT role FROM organization_members WHERE user_id=?").get(collaboratorId) as any).role, "collaborator");
-  assert.deepEqual(acceptedRow.prepare("SELECT permission FROM role_permissions WHERE role='collaborator' ORDER BY permission").all().map((row: any) => row.permission), ["clients.create","clients.edit","clients.view","events.create","events.edit","events.view","finance.view","repertoire.view","reports.view","settings.view","team.create","team.edit","team.view"]);
-  assert.equal(acceptedRow.prepare("SELECT 1 FROM role_permissions WHERE role='collaborator' AND permission='users.view'").get(), undefined);
-  acceptedRow.close();
+  const collaboratorId = Number((await queryTestDatabase("SELECT id FROM users WHERE email=?", "rbac@t.com")).rows[0].id);
+  assert.equal((await queryTestDatabase("SELECT role FROM organization_members WHERE user_id=?", collaboratorId)).rows[0].role, "collaborator");
+  assert.deepEqual((await queryTestDatabase("SELECT permission FROM role_permissions WHERE role='collaborator' ORDER BY permission")).rows.map((row: any) => row.permission), ["clients.create","clients.edit","clients.view","events.create","events.edit","events.view","finance.view","repertoire.view","reports.view","settings.view","team.create","team.edit","team.view"]);
+  assert.equal((await queryTestDatabase("SELECT 1 FROM role_permissions WHERE role='collaborator' AND permission='users.view'")).rows.length, 0);
   const login = await call("POST", "/api/auth/login", { email: "rbac@t.com", password: "senha-colaborador-1" }, "");
   assert.equal(login.s, 200);
   const collaboratorCookie = login.h!.split(";")[0];
@@ -780,9 +757,7 @@ test("colaboradores: convite, ativação, RBAC granular e revogação de sessão
   assert.equal(adminLogin.s, 200);
   ck = adminLogin.h!.split(";")[0];
   const adminCookie = ck;
-  const raw = new DatabaseSync(DB);
-  const userId = Number((raw.prepare("SELECT id FROM users WHERE email='rbac@t.com'").get() as any).id);
-  raw.close();
+  const userId = Number((await queryTestDatabase("SELECT id FROM users WHERE email=?", "rbac@t.com")).rows[0].id);
   const scoped = await call("GET", "/api/admin/users");
   assert.equal(scoped.s, 200);
   assert.equal(scoped.j.users.some((user: any) => user.id === userId), true);
@@ -834,9 +809,7 @@ test("administrador pode convidar um novo administrador com perfil persistido", 
   assert.equal(logs.includes("private.user@example.com"), false, "mensagem do provedor tem e-mail sanitizado");
   assert.equal(logs.includes(providerEchoToken), false, "token ecoado pelo provedor é sanitizado");
   assert.equal(logs.includes("mock-brevo-key-for-tests"), false, "chave nunca aparece nos logs");
-  const rejectedDb = new DatabaseSync(DB);
-  assert.equal((rejectedDb.prepare("SELECT COUNT(*) n FROM invitations WHERE email='falha-convite@t.com'").get() as any).n, 0, "convite não enviado é removido");
-  rejectedDb.close();
+  assert.equal(Number((await queryTestDatabase("SELECT COUNT(*)::int n FROM invitations WHERE email=?", "falha-convite@t.com")).rows[0].n), 0, "convite não enviado é removido");
   assert.equal(mails().length, failInviteEmailCount + 1);
 
   writeFileSync(EMAIL_FAIL, JSON.stringify({ status: 401, body: { code: "unauthorized", message: "Authentication failed: mock-brevo-key-for-tests" } }));
@@ -865,10 +838,8 @@ test("administrador pode convidar um novo administrador com perfil persistido", 
   const invitation = await call("POST", "/api/admin/invitations", { name: "Admin convidado", email: "admin-convidado@t.com", role: "admin" }, adminCookie);
   assert.equal(invitation.s, 201);
   assert.equal(invitation.j.role, "admin");
-  const raw = new DatabaseSync(DB);
-  const stored = raw.prepare("SELECT target_role,token_hash FROM invitations WHERE email='admin-convidado@t.com'").get() as any;
+  const stored = (await queryTestDatabase("SELECT target_role,token_hash FROM invitations WHERE email=?", "admin-convidado@t.com")).rows[0] as any;
   assert.equal(stored.target_role, "admin");
-  raw.close();
   const adminMail = mails().at(-1)!;
   assert.equal(mails().length, beforeAdminInvite + 1);
   assert.equal(adminMail.to[0].email, "admin-convidado@t.com");
@@ -880,11 +851,9 @@ test("administrador pode convidar um novo administrador com perfil persistido", 
   assert.equal(logs.includes(token), false, "token não aparece nos logs");
   assert.equal(createHash("sha256").update(token).digest("hex"), stored.token_hash, "token enviado corresponde apenas ao hash armazenado");
   assert.equal((await call("POST", "/api/invitations/accept", { token, password: "senha-admin-convidado-1" }, "")).s, 200);
-  const accepted = new DatabaseSync(DB);
-  const id = Number((accepted.prepare("SELECT id FROM users WHERE email='admin-convidado@t.com'").get() as any).id);
-  assert.equal((accepted.prepare("SELECT role FROM organization_members WHERE user_id=?").get(id) as any).role, "admin");
-  assert.equal((accepted.prepare("SELECT COUNT(*) n FROM role_permissions WHERE role='admin'").get() as any).n, (accepted.prepare("SELECT COUNT(*) n FROM permissions").get() as any).n);
-  accepted.close();
+  const id = Number((await queryTestDatabase("SELECT id FROM users WHERE email=?", "admin-convidado@t.com")).rows[0].id);
+  assert.equal((await queryTestDatabase("SELECT role FROM organization_members WHERE user_id=?", id)).rows[0].role, "admin");
+  assert.equal(Number((await queryTestDatabase("SELECT COUNT(*)::int n FROM role_permissions WHERE role='admin'")).rows[0].n), Number((await queryTestDatabase("SELECT COUNT(*)::int n FROM permissions")).rows[0].n));
   const login = await call("POST", "/api/auth/login", { email: "admin-convidado@t.com", password: "senha-admin-convidado-1" }, "");
   const cookie = login.h!.split(";")[0];
   assert.equal((await call("GET", "/api/auth/me", undefined, cookie)).j.role, "admin");
@@ -892,24 +861,15 @@ test("administrador pode convidar um novo administrador com perfil persistido", 
 });
 
 test("isolamento entre organizações bloqueia IDOR em dados e usuários", async () => {
-  const raw = new DatabaseSync(DB);
-  const org = raw.prepare("INSERT INTO organizations(name) VALUES(?)").run("Organização B");
-  const orgId = Number(org.lastInsertRowid), salt = "other-org-password-salt";
-  const user = raw.prepare("INSERT INTO users(email,name,hash) VALUES(?,?,?)").run("orgb@t.com", "Usuário B", `${salt}:${scryptSync("senha-orgb-1", salt, 64).toString("hex")}`);
-  const userId = Number(user.lastInsertRowid);
-  raw.prepare("INSERT INTO organization_members(user_id,organization_id,role,status) VALUES(?,?,'admin','active')").run(userId, orgId);
-  const client = raw.prepare("INSERT INTO clients(name,organization_id) VALUES(?,?)").run("Cliente B", orgId);
-  const clientId = Number(client.lastInsertRowid);
-  const event = raw.prepare("INSERT INTO events(name,client_id,organization_id) VALUES(?,?,?)").run("Evento B", clientId, orgId);
-  const eventId = Number(event.lastInsertRowid);
-  const finance = raw.prepare("INSERT INTO finances(event_id,description,amount,due_date,organization_id) VALUES(?,?,?,?,?)").run(eventId, "Lançamento B", 100, "2027-01-01", orgId);
-  const financeId = Number(finance.lastInsertRowid);
-  const member = raw.prepare("INSERT INTO integrantes_equipe(name,role,phone,organization_id) VALUES(?,?,?,?)").run("Equipe B", "Músico", "41999999999", orgId);
-  const memberId = Number(member.lastInsertRowid);
-  const repertoire = raw.prepare("INSERT INTO repertoire(event_id,moment,position,title,organization_id) VALUES(?,?,?,?,?)").run(eventId, "entrada", 1, "Música B", orgId);
-  const repertoireId = Number(repertoire.lastInsertRowid);
-  raw.prepare("INSERT INTO company_settings(user_id,organization_id,nome,exibicao,email,telefone) VALUES(?,?,?,?,?,?)").run(userId, orgId, "Empresa B", "B", "b@empresa.com", "41999999999");
-  raw.close();
+  const orgId = Number((await queryTestDatabase("INSERT INTO organizations(name) VALUES(?) RETURNING id", "Organização B")).rows[0].id), salt = "other-org-password-salt";
+  const userId = Number((await queryTestDatabase("INSERT INTO users(email,name,hash) VALUES(?,?,?) RETURNING id", "orgb@t.com", "Usuário B", `${salt}:${scryptSync("senha-orgb-1", salt, 64).toString("hex")}`)).rows[0].id);
+  await queryTestDatabase("INSERT INTO organization_members(user_id,organization_id,role,status) VALUES(?,?,'admin','active')", userId, orgId);
+  const clientId = Number((await queryTestDatabase("INSERT INTO clients(name,organization_id) VALUES(?,?) RETURNING id", "Cliente B", orgId)).rows[0].id);
+  const eventId = Number((await queryTestDatabase("INSERT INTO events(name,client_id,organization_id) VALUES(?,?,?) RETURNING id", "Evento B", clientId, orgId)).rows[0].id);
+  const financeId = Number((await queryTestDatabase("INSERT INTO finances(event_id,description,amount,due_date,organization_id) VALUES(?,?,?,?,?) RETURNING id", eventId, "Lançamento B", 100, "2027-01-01", orgId)).rows[0].id);
+  const memberId = Number((await queryTestDatabase("INSERT INTO integrantes_equipe(name,role,phone,organization_id) VALUES(?,?,?,?) RETURNING id", "Equipe B", "Músico", "41999999999", orgId)).rows[0].id);
+  const repertoireId = Number((await queryTestDatabase("INSERT INTO repertoire(event_id,moment,position,title,organization_id) VALUES(?,?,?,?,?) RETURNING id", eventId, "entrada", 1, "Música B", orgId)).rows[0].id);
+  await queryTestDatabase("INSERT INTO company_settings(user_id,organization_id,nome,exibicao,email,telefone) VALUES(?,?,?,?,?,?)", userId, orgId, "Empresa B", "B", "b@empresa.com", "41999999999");
   const login = await call("POST", "/api/auth/login", { email: "novo@t.com", password: "outra-senha-9" }, "");
   const adminCookie = login.h!.split(";")[0];
   const ownEvent = await call("POST", "/api/events", { name: "Evento A" }, adminCookie);
